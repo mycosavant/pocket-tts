@@ -52,7 +52,12 @@ android {
     }
 
     testOptions {
-        unitTests.isReturnDefaultValues = true
+        unitTests {
+            isReturnDefaultValues = true
+            // Robolectric boots the real activities against real resources, so
+            // a theme or manifest mistake fails the build instead of the phone.
+            isIncludeAndroidResources = true
+        }
     }
 }
 
@@ -76,4 +81,7 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.test.junit)
 }

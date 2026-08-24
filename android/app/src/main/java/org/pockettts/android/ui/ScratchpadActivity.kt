@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import io.noties.markwon.Markwon
 import org.pockettts.android.R
@@ -29,12 +30,16 @@ class ScratchpadActivity : AppCompatActivity() {
     private var showingPreview = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         binding = ActivityScratchpadBinding.inflate(layoutInflater)
         setContentView(binding.root)
         settings = Settings(this)
 
         setSupportActionBar(binding.toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        binding.toolbar.setNavigationOnClickListener { finish() }
+        Insets.apply(top = binding.appBar, bottom = binding.controls)
 
         val shared = intent
             ?.takeIf { it.action == Intent.ACTION_SEND }

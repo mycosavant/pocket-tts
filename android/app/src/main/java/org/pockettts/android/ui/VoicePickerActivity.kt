@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import android.widget.Toast
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -34,6 +35,7 @@ class VoicePickerActivity : AppCompatActivity() {
     ) { uri -> uri?.let { importVoice(it) } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         binding = ActivityVoicePickerBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -42,6 +44,7 @@ class VoicePickerActivity : AppCompatActivity() {
         setSupportActionBar(binding.toolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         binding.toolbar.setNavigationOnClickListener { finish() }
+        Insets.apply(top = binding.appBar, bottom = binding.root)
 
         adapter = VoiceAdapter(entries(), settings.voiceId) { id ->
             settings.voiceId = id

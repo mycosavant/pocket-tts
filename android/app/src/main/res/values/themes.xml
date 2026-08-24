@@ -1,17 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.PocketTts" parent="Theme.Material3.DayNight">
-        <item name="android:statusBarColor">?attr/colorSurface</item>
+    <!--
+        NoActionBar, deliberately: every screen supplies its own MaterialToolbar.
+        A theme that also hands out a decor action bar makes setSupportActionBar
+        throw, which takes the activity down on launch.
+    -->
+    <style name="Theme.PocketTts" parent="Theme.Material3.DayNight.NoActionBar">
+        <!--
+            targetSdk 35 means Android 15 lays every window out edge to edge, so
+            the bars are drawn over rather than beside the content. Painting them
+            transparent and paying the insets back as padding is the only way the
+            top of the screen stays reachable.
+        -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">?attr/isLightTheme</item>
     </style>
 
     <!--
-        The read-aloud sheet floats over whatever app the text was selected in,
-        so it must not paint a full-screen background over it.
+        The read-aloud sheet floats over whatever app the text was selected in.
+        Its background is built at runtime in ui/Glass.kt so it can follow the
+        device's dynamic colour scheme and switch between a real cross-window
+        blur and an opaque fallback; the window only has to be translucent
+        enough to let that happen.
     -->
-    <style name="Theme.PocketTts.Transparent" parent="Theme.Material3.DayNight.Dialog">
+    <style name="Theme.PocketTts.Glass" parent="Theme.Material3.DayNight.Dialog">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
         <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.2</item>
         <item name="android:windowCloseOnTouchOutside">true</item>
+        <item name="android:windowMinWidthMajor">80%</item>
+        <item name="android:windowMinWidthMinor">92%</item>
     </style>
 </resources>

@@ -18,6 +18,9 @@ commons-compress = { module = "org.apache.commons:commons-compress", version = "
 markwon-core = { module = "io.noties.markwon:core", version = "4.6.2" }
 
 junit = { module = "junit:junit", version = "4.13.2" }
+robolectric = { module = "org.robolectric:robolectric", version = "4.14.1" }
+androidx-test-core = { module = "androidx.test:core-ktx", version = "1.6.1" }
+androidx-test-junit = { module = "androidx.test.ext:junit-ktx", version = "1.2.1" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 
 [plugins]

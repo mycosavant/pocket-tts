@@ -89,6 +89,21 @@ other apps ─────▶ PocketTtsService ───┘      ▼
 `MarkdownSpeech`, `TextChunker` and `WavReader` are plain JVM code and are
 covered by unit tests in `app/src/test`.
 
+`ActivityLaunchTest` drives every activity through its real lifecycle under
+Robolectric. A theme, a manifest entry and a layout can crash an activity just
+as easily as a function can, and none of them are type-checked — an early build
+shipped a theme that supplied a decor action bar to screens that also called
+`setSupportActionBar`, which compiled, packaged, and then threw the moment
+either screen was opened. These tests fail on that.
+
+## Edge-to-edge
+
+`targetSdk 35` means Android 15 lays every window out edge to edge, so the
+system bars are drawn over the content rather than beside it. `ui/Insets.kt`
+pays those insets back as padding: each screen names the view that absorbs the
+top inset (its app bar) and the one that absorbs the bottom. Without it the
+toolbar wears the status bar and the first control is sliced in half.
+
 ## Licensing
 
 Worth reading before shipping anything built from this.

@@ -36,7 +36,7 @@
             android:label="@string/read_aloud"
             android:excludeFromRecents="true"
             android:launchMode="singleTop"
-            android:theme="@style/Theme.PocketTts.Transparent">
+            android:theme="@style/Theme.PocketTts.Glass">
             <intent-filter>
                 <action android:name="android.intent.action.PROCESS_TEXT" />
                 <category android:name="android.intent.category.DEFAULT" />
