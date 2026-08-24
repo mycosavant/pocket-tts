@@ -27,8 +27,16 @@ jobs:
     - name: Build debug APK
       working-directory: android
       run: ./gradlew --no-daemon :app:assembleDebug
+    # Every run of this workflow uploads an APK. Without the commit in the
+    # name they are indistinguishable in the Actions list, and it is very easy
+    # to sideload a stale build and conclude a fix did not work.
+    - name: Label this build
+      id: label
+      env:
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: echo "tag=${GITHUB_RUN_NUMBER}-${HEAD_SHA:0:7}" >> "$GITHUB_OUTPUT"
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: pocket-tts-debug-apk
+        name: pocket-tts-debug-apk-${{ steps.label.outputs.tag }}
         path: android/app/build/outputs/apk/debug/*.apk
