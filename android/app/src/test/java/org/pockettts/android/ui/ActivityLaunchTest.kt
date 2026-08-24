@@ -27,14 +27,44 @@ import org.robolectric.annotation.Config
  * A theme, a manifest entry and a layout are as capable of crashing an activity
  * as any function is, and none of them are type-checked. So each screen gets
  * driven through its real lifecycle here.
+ *
+ * Reaching RESUMED is not enough on its own. Views validate themselves during
+ * layout, and `setup()` alone never lays anything out - which is how a Material
+ * `Slider` handed an off-grid value (`170f/255f` against a `0.01` step) sailed
+ * through these tests and then threw `IllegalStateException` from
+ * `onSizeChanged` the moment the appearance screen was opened. [layOut] forces
+ * a real measure and layout pass so that class of failure surfaces here.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [Build.VERSION_CODES.UPSIDE_DOWN_CAKE])
 class ActivityLaunchTest {
 
+    /**
+     * Forces a measure and layout pass at a realistic size, so views that
+     * validate their configuration while sizing actually do it.
+     */
+    private fun layOut(activity: android.app.Activity) {
+        val root = activity.findViewById<android.view.View>(android.R.id.content)
+        root.measure(
+            android.view.View.MeasureSpec.makeMeasureSpec(1080, android.view.View.MeasureSpec.EXACTLY),
+            android.view.View.MeasureSpec.makeMeasureSpec(2400, android.view.View.MeasureSpec.EXACTLY),
+        )
+        root.layout(0, 0, 1080, 2400)
+    }
+
+    @Test
+    fun `appearance screen survives layout with the stored glass values`() {
+        Robolectric.buildActivity(AppearanceActivity::class.java).setup().use { controller ->
+            // The sliders validate here, not at construction.
+            layOut(controller.get())
+            assertFalse(controller.get().isFinishing)
+        }
+    }
+
     @Test
     fun `main activity reaches resumed state`() {
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            layOut(controller.get())
             assertNotNull(controller.get().findViewById<Toolbar>(R.id.toolbar))
         }
     }
@@ -42,6 +72,7 @@ class ActivityLaunchTest {
     @Test
     fun `voice picker reaches resumed state`() {
         Robolectric.buildActivity(VoicePickerActivity::class.java).setup().use { controller ->
+            layOut(controller.get())
             assertNotNull(controller.get())
         }
     }
@@ -49,6 +80,7 @@ class ActivityLaunchTest {
     @Test
     fun `scratchpad reaches resumed state`() {
         Robolectric.buildActivity(ScratchpadActivity::class.java).setup().use { controller ->
+            layOut(controller.get())
             assertNotNull(controller.get())
         }
     }
@@ -65,6 +97,7 @@ class ActivityLaunchTest {
         }
         Robolectric.buildActivity(ReadAloudActivity::class.java, intent).setup().use { controller ->
             val activity = controller.get()
+            layOut(activity)
             // Blur is best-effort, but the surface behind the controls is not:
             // without a window background the panel is invisible over the host
             // app, which is exactly what it looked like before.

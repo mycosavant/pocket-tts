@@ -3,6 +3,8 @@ package org.pockettts.android.ui
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.math.BigDecimal
+import java.math.MathContext
 
 /**
  * The whole point of the tuning screen is that a number read off a slider can be
@@ -67,5 +69,59 @@ class GlassValuesTest {
         assertTrue(snippet, snippet.contains("= 20f"))
         assertTrue(snippet, snippet.contains("= 0.2f"))
         assertTrue(snippet, snippet.contains("= 16f"))
+    }
+
+    /**
+     * Material's own rule, reproduced from `BaseSlider.isMultipleOfStepSize`.
+     *
+     * It validates during layout and throws rather than rounding, so an
+     * off-grid value does not look slightly wrong - it destroys the screen as
+     * it opens. Asserting against the real rule is the only way to know a value
+     * is safe without a device.
+     */
+    private fun isOnGrid(value: Float, from: Float, step: Float): Boolean {
+        val multiple = BigDecimal(value.toString())
+            .subtract(BigDecimal(from.toString()))
+            .divide(BigDecimal(step.toString()), MathContext.DECIMAL64)
+            .toDouble()
+        return Math.abs(Math.round(multiple) - multiple) < 1e-4
+    }
+
+    @Test
+    fun `the AOSP-derived alpha default is on the grid`() {
+        // 170f/255f is 0.6666667, which is not a multiple of 0.01. Shipping it
+        // straight to the slider threw IllegalStateException during layout and
+        // crashed the appearance screen the instant it was opened.
+        val snapped = GlassValues.snapToStep(170f / 255f, 0f, 1f, 0.01f)
+        assertTrue("$snapped is off the 0.01 grid", isOnGrid(snapped, 0f, 0.01f))
+        assertEquals(0.67f, snapped, 1e-6f)
+    }
+
+    @Test
+    fun `snapping lands on the grid across the whole range`() {
+        var value = 0f
+        while (value <= 1f) {
+            val snapped = GlassValues.snapToStep(value, 0f, 1f, 0.01f)
+            assertTrue("$value snapped to $snapped, off grid", isOnGrid(snapped, 0f, 0.01f))
+            value += 0.0037f
+        }
+    }
+
+    @Test
+    fun `snapping respects whole-number steps`() {
+        assertEquals(48f, GlassValues.snapToStep(47.6f, 0f, 80f, 1f), 1e-6f)
+        assertEquals(28f, GlassValues.snapToStep(28.4f, 0f, 48f, 1f), 1e-6f)
+    }
+
+    @Test
+    fun `snapping clamps to the slider bounds`() {
+        assertEquals(0f, GlassValues.snapToStep(-5f, 0f, 1f, 0.01f), 1e-6f)
+        assertEquals(1f, GlassValues.snapToStep(9f, 0f, 1f, 0.01f), 1e-6f)
+        assertEquals(80f, GlassValues.snapToStep(120f, 0f, 80f, 1f), 1e-6f)
+    }
+
+    @Test
+    fun `a zero step is passed through rather than dividing by zero`() {
+        assertEquals(0.42f, GlassValues.snapToStep(0.42f, 0f, 1f, 0f), 1e-6f)
     }
 }

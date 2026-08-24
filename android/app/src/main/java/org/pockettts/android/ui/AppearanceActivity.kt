@@ -45,10 +45,7 @@ class AppearanceActivity : AppCompatActivity() {
             },
         )
 
-        binding.alphaSlider.value = settings.glassAlpha
-        binding.blurSlider.value = settings.glassBlurDp
-        binding.dimSlider.value = settings.glassDim
-        binding.cornerSlider.value = settings.glassCornerDp
+        applyToSliders()
 
         onSlide(binding.alphaSlider) { settings.glassAlpha = it }
         onSlide(binding.blurSlider) { settings.glassBlurDp = it }
@@ -58,14 +55,32 @@ class AppearanceActivity : AppCompatActivity() {
         binding.copyButton.setOnClickListener { copyAsKotlin() }
         binding.resetButton.setOnClickListener {
             settings.resetGlass()
-            binding.alphaSlider.value = settings.glassAlpha
-            binding.blurSlider.value = settings.glassBlurDp
-            binding.dimSlider.value = settings.glassDim
-            binding.cornerSlider.value = settings.glassCornerDp
+            applyToSliders()
             render()
         }
 
         render()
+    }
+
+    /**
+     * Every value goes through the step grid on the way in. A slider handed an
+     * off-grid value throws during layout rather than rounding, so a stored
+     * setting from another build would otherwise crash this screen on open.
+     */
+    private fun applyToSliders() {
+        listOf(
+            binding.alphaSlider to settings.glassAlpha,
+            binding.blurSlider to settings.glassBlurDp,
+            binding.dimSlider to settings.glassDim,
+            binding.cornerSlider to settings.glassCornerDp,
+        ).forEach { (slider, value) ->
+            slider.value = GlassValues.snapToStep(
+                value,
+                slider.valueFrom,
+                slider.valueTo,
+                slider.stepSize,
+            )
+        }
     }
 
     private fun onSlide(slider: Slider, store: (Float) -> Unit) {

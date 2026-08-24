@@ -82,10 +82,12 @@ class Settings(context: Context) {
 
         /**
          * AOSP's own window-blur sample uses alpha 170 of 255 with blur active,
-         * which is the anchor for this default. Earlier builds guessed 0.30 and
-         * 0.62 and both read wrong on device.
+         * which is the anchor for this default. Written as 0.67 rather than
+         * 170f/255f so it lands on the appearance slider's 0.01 step grid -
+         * 0.6666667 does not, and Material's Slider throws on values that miss
+         * the grid.
          */
-        const val DEFAULT_GLASS_ALPHA = 170f / 255f
+        const val DEFAULT_GLASS_ALPHA = 0.67f
         const val DEFAULT_GLASS_BLUR_DP = 48f
         const val DEFAULT_GLASS_DIM = 0.35f
         const val DEFAULT_GLASS_CORNER_DP = 28f

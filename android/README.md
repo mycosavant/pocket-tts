@@ -90,11 +90,16 @@ other apps ─────▶ PocketTtsService ───┘      ▼
 covered by unit tests in `app/src/test`.
 
 `ActivityLaunchTest` drives every activity through its real lifecycle under
-Robolectric. A theme, a manifest entry and a layout can crash an activity just
-as easily as a function can, and none of them are type-checked — an early build
-shipped a theme that supplied a decor action bar to screens that also called
-`setSupportActionBar`, which compiled, packaged, and then threw the moment
-either screen was opened. These tests fail on that.
+Robolectric, and forces a measure and layout pass at a realistic size. A theme,
+a manifest entry and a layout can crash an activity just as easily as a function
+can, and none of them are type-checked — one build shipped a theme that supplied
+a decor action bar to screens that also called `setSupportActionBar`, and
+another handed a Material `Slider` a value off its step grid. Both compiled,
+packaged, and threw the instant the screen opened.
+
+The layout pass is the part that earns its keep. Views validate themselves while
+sizing, so reaching RESUMED proves very little: the slider bug passed a version
+of these tests that stopped at `setup()`, because nothing had been laid out yet.
 
 ## When it crashes
 
