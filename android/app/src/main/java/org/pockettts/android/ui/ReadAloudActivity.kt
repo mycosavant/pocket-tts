@@ -38,7 +38,7 @@ class ReadAloudActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         // Before setContentView, so the window already carries its background
         // and blur flags the first time it is laid out.
-        Glass.apply(this)
+        Glass.applyToWindow(this)
         binding = ActivityReadAloudBinding.inflate(layoutInflater)
         setContentView(binding.root)
 

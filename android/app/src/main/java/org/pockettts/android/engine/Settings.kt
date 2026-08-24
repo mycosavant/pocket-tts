@@ -37,6 +37,35 @@ class Settings(context: Context) {
         get() = prefs.getBoolean(KEY_SELECTION_MARKDOWN, true)
         set(value) = prefs.edit { putBoolean(KEY_SELECTION_MARKDOWN, value) }
 
+    /**
+     * Glass panel appearance. Exposed as settings rather than constants so the
+     * values can be dialled in on a real device - the effect depends on the
+     * wallpaper, the theme and whether the device supports blur at all, none of
+     * which can be judged from source.
+     */
+    var glassAlpha: Float
+        get() = prefs.getFloat(KEY_GLASS_ALPHA, DEFAULT_GLASS_ALPHA).coerceIn(0f, 1f)
+        set(value) = prefs.edit { putFloat(KEY_GLASS_ALPHA, value.coerceIn(0f, 1f)) }
+
+    var glassBlurDp: Float
+        get() = prefs.getFloat(KEY_GLASS_BLUR, DEFAULT_GLASS_BLUR_DP).coerceIn(0f, MAX_BLUR_DP)
+        set(value) = prefs.edit { putFloat(KEY_GLASS_BLUR, value.coerceIn(0f, MAX_BLUR_DP)) }
+
+    var glassDim: Float
+        get() = prefs.getFloat(KEY_GLASS_DIM, DEFAULT_GLASS_DIM).coerceIn(0f, 1f)
+        set(value) = prefs.edit { putFloat(KEY_GLASS_DIM, value.coerceIn(0f, 1f)) }
+
+    var glassCornerDp: Float
+        get() = prefs.getFloat(KEY_GLASS_CORNER, DEFAULT_GLASS_CORNER_DP).coerceIn(0f, MAX_CORNER_DP)
+        set(value) = prefs.edit { putFloat(KEY_GLASS_CORNER, value.coerceIn(0f, MAX_CORNER_DP)) }
+
+    fun resetGlass() {
+        glassAlpha = DEFAULT_GLASS_ALPHA
+        glassBlurDp = DEFAULT_GLASS_BLUR_DP
+        glassDim = DEFAULT_GLASS_DIM
+        glassCornerDp = DEFAULT_GLASS_CORNER_DP
+    }
+
     var scratchpad: String
         get() = prefs.getString(KEY_SCRATCHPAD, "") ?: ""
         set(value) = prefs.edit { putString(KEY_SCRATCHPAD, value) }
@@ -48,11 +77,28 @@ class Settings(context: Context) {
         const val MAX_SPEED = 2.0f
         private const val DEFAULT_THREADS = 2
 
+        const val MAX_BLUR_DP = 80f
+        const val MAX_CORNER_DP = 48f
+
+        /**
+         * AOSP's own window-blur sample uses alpha 170 of 255 with blur active,
+         * which is the anchor for this default. Earlier builds guessed 0.30 and
+         * 0.62 and both read wrong on device.
+         */
+        const val DEFAULT_GLASS_ALPHA = 170f / 255f
+        const val DEFAULT_GLASS_BLUR_DP = 48f
+        const val DEFAULT_GLASS_DIM = 0.35f
+        const val DEFAULT_GLASS_CORNER_DP = 28f
+
         private const val KEY_VOICE = "voice"
         private const val KEY_SPEED = "speed"
         private const val KEY_THREADS = "threads"
         private const val KEY_CODE_BLOCKS = "speak_code_blocks"
         private const val KEY_SELECTION_MARKDOWN = "selection_markdown"
         private const val KEY_SCRATCHPAD = "scratchpad"
+        private const val KEY_GLASS_ALPHA = "glass_alpha"
+        private const val KEY_GLASS_BLUR = "glass_blur_dp"
+        private const val KEY_GLASS_DIM = "glass_dim"
+        private const val KEY_GLASS_CORNER = "glass_corner_dp"
     }
 }

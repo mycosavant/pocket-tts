@@ -42,4 +42,19 @@
     <string name="crash_title">Pocket TTS crashed last time</string>
     <string name="crash_share">Share report</string>
     <string name="crash_dismiss">Dismiss</string>
+    <string name="appearance">Appearance</string>
+    <string name="label_opacity">Panel opacity — %1$s</string>
+    <string name="label_blur">Blur radius — %1$s</string>
+    <string name="label_dim">Dim behind — %1$s</string>
+    <string name="label_corner">Corner radius — %1$s</string>
+    <string name="copy_as_kotlin">Copy values as Kotlin</string>
+    <string name="reset_defaults">Reset to defaults</string>
+    <string name="copied">Copied to clipboard</string>
+    <string name="preview_backdrop">Behind the panel</string>
+    <string name="preview_backdrop_body">This text is blurred by the same code the real overlay uses, so what you dial in here is what ships.</string>
+    <string name="preview_panel_body">Panel sample text</string>
+    <string name="capability_cross_window">Cross-window blur: supported. Panels over other apps will frost them.</string>
+    <string name="capability_in_app_only">Cross-window blur: unsupported on this device — Samsung does not enable it on One UI. In-app blur (RenderEffect) works, so the scratchpad overlay frosts properly; a panel over another app gets an opaque surface instead, because no app may read another app\'s pixels.</string>
+    <string name="capability_none">Blur needs Android 12 or newer. Panels use a solid surface.</string>
+    <string name="exit_title">Pocket TTS closed unexpectedly</string>
 </resources>

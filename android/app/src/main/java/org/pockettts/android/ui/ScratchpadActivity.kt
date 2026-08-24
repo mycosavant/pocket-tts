@@ -7,6 +7,10 @@ import android.view.MenuItem
 import android.view.View
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 import io.noties.markwon.Markwon
 import org.pockettts.android.R
 import org.pockettts.android.databinding.ActivityScratchpadBinding
@@ -54,6 +58,13 @@ class ScratchpadActivity : AppCompatActivity() {
                 else -> settings.scratchpad.trimEnd() + "\n\n" + shared
             },
         )
+
+        binding.overlayPause.setOnClickListener { Reader.togglePause() }
+        binding.overlayStop.setOnClickListener {
+            Reader.stop()
+            PlaybackService.stop(this)
+        }
+        observeReader()
 
         binding.speakButton.setOnClickListener { speak() }
         binding.stopButton.setOnClickListener {
@@ -116,6 +127,52 @@ class ScratchpadActivity : AppCompatActivity() {
         if (text.isBlank()) return
         Reader.speak(this, text, treatAsMarkdown = true)
         PlaybackService.start(this)
+    }
+
+    /**
+     * Reading is shown as an overlay inside this screen rather than a separate
+     * window, which is what makes the frosted panel possible here.
+     *
+     * A floating window over another app can only be blurred by the platform's
+     * cross-window blur, which most Samsung devices do not implement. An overlay
+     * over our own content has no such restriction: RenderEffect blurs the view
+     * beneath it on any Android 12 device.
+     */
+    private fun observeReader() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                Reader.state.collect { state -> renderReading(state) }
+            }
+        }
+    }
+
+    private fun renderReading(state: Reader.State) {
+        val reading = state !is Reader.State.Idle
+        binding.readingOverlay.visibility = if (reading) View.VISIBLE else View.GONE
+        Glass.blur(binding.editorArea, if (reading) settings.glassBlurDp else 0f)
+
+        if (!reading) return
+        binding.readingOverlay.background =
+            Glass.panelBackground(this, settings.glassAlpha, settings.glassCornerDp)
+        when (state) {
+            is Reader.State.Preparing -> {
+                binding.overlayStatus.setText(R.string.preparing)
+                binding.overlayPause.isEnabled = false
+            }
+
+            is Reader.State.Speaking -> {
+                binding.overlayStatus.setText(R.string.reading_aloud)
+                binding.overlayPause.isEnabled = true
+                binding.overlayPause.setText(if (state.paused) R.string.resume else R.string.pause)
+            }
+
+            is Reader.State.Failed -> {
+                binding.overlayStatus.text = getString(R.string.error_generic, state.message)
+                binding.overlayPause.isEnabled = false
+            }
+
+            Reader.State.Idle -> Unit
+        }
     }
 
     private companion object {

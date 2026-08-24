@@ -63,6 +63,11 @@
         </activity>
 
         <activity
+            android:name=".ui.AppearanceActivity"
+            android:exported="false"
+            android:label="@string/appearance" />
+
+        <activity
             android:name=".ui.VoicePickerActivity"
             android:exported="false"
             android:label="@string/voices" />

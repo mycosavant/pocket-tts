@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import org.pockettts.android.R
 import org.pockettts.android.databinding.ActivityMainBinding
 import org.pockettts.android.debug.CrashLog
+import org.pockettts.android.debug.ExitReasons
 import org.pockettts.android.engine.ModelManager
 import org.pockettts.android.engine.Settings
 import org.pockettts.android.engine.VoiceCatalog
@@ -43,6 +44,9 @@ class MainActivity : AppCompatActivity() {
         binding.downloadButton.setOnClickListener { startDownload() }
         binding.chooseVoiceButton.setOnClickListener {
             startActivity(Intent(this, VoicePickerActivity::class.java))
+        }
+        binding.appearanceButton.setOnClickListener {
+            startActivity(Intent(this, AppearanceActivity::class.java))
         }
         binding.scratchpadButton.setOnClickListener {
             startActivity(Intent(this, ScratchpadActivity::class.java))
@@ -94,14 +98,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * A sideloaded app that dies has no logcat anyone can reach, so the last
-     * stack trace is offered here instead. Shown once and then cleared, so it
-     * does not nag after it has been read.
+     * A sideloaded app that dies has no logcat anyone can reach, so the evidence
+     * is offered here instead. Shown once and then cleared.
+     *
+     * Two sources, because they see different failures. `CrashLog` catches
+     * exceptions that unwind through the JVM; `ExitReasons` reads the platform's
+     * own record, which is the only thing that sees a native crash, an ANR or a
+     * low-memory kill. The platform record wins when both exist - it names the
+     * kind of death, which is the part that decides what to do next.
      */
     private fun offerLastCrash() {
-        val report = CrashLog.lastCrash(this) ?: return
+        val exit = ExitReasons.lastInterestingExit(this)
+        val crash = CrashLog.lastCrash(this)
+        val report = when {
+            exit != null && crash != null -> "${exit.detail}\n\n--- java stack trace ---\n$crash"
+            exit != null -> exit.detail
+            crash != null -> crash
+            else -> return
+        }
+        val title = if (exit != null) R.string.exit_title else R.string.crash_title
+
         MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.crash_title)
+            .setTitle(title)
             .setMessage(report.lineSequence().take(CRASH_PREVIEW_LINES).joinToString("\n"))
             .setPositiveButton(R.string.crash_share) { _, _ ->
                 CrashLog.clear(this)

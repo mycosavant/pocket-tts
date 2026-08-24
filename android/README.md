@@ -105,10 +105,41 @@ share it. It chains to the previous handler rather than swallowing the crash, so
 the process still dies and the system dialog still appears - only the evidence
 survives.
 
-This does not catch native crashes. A segfault or an out-of-memory kill inside
-ONNX Runtime takes the process down without unwinding through the JVM, so an
-abrupt death with no report on the next launch points at the model rather than
-at app code.
+`CrashLog` alone cannot catch native crashes, ANRs or low-memory kills - none of
+them unwind through the JVM - and those look identical from the outside to a
+Kotlin exception. `debug/ExitReasons` closes that gap by reading the platform's
+own record via `ApplicationExitInfo`, which names the kind of death and, for a
+native crash on Android 12+, carries the tombstone. That reason code is the fact
+that decides what to fix; the two sources are shown together on next launch.
+
+## Glass, and where it cannot exist
+
+Blurring depends entirely on what is behind the panel, and the two cases have
+different answers.
+
+Behind **another app**, only `Window.setBackgroundBlurRadius` can blur, because
+an app may not read another app's pixels. That API is gated on a vendor opt-in
+(`ro.surface_flinger.supports_background_blur`) and Samsung does not set it -
+their [developer forum](https://forum.developer.samsung.com/t/why-does-oneui-not-support-crosswindowblur/34386)
+confirms cross-window blur is unsupported across One UI, S24 Ultra included. On
+those devices the effect is unavailable and no radius or alpha will produce it,
+so the panel is drawn near-opaque instead of leaving unreadable text floating
+over someone else's app.
+
+Behind **our own content**, `RenderEffect.createBlurEffect` blurs any view we own
+on any Android 12 device with no vendor opt-in. This is why the scratchpad shows
+reading as an in-app overlay rather than a floating window: the overlay route can
+actually frost. It is the same technique [Haze](https://chrisbanes.github.io/haze/)
+uses on Android; Haze is Compose Multiplatform and this app is Views, so the
+technique is borrowed and the dependency is not.
+
+`ui/AppearanceActivity` exposes opacity, blur, dim and corner radius as sliders,
+because how this reads depends on the wallpaper-derived palette and the display
+density - neither of which can be judged from source. Every label reports the
+value in the form the source wants (`0.667f · alpha 170 · 67%`), and a button
+copies the whole set as pasteable Kotlin. It also states plainly which blur
+strategy is live on the device, so nobody spends an evening tuning a value that
+cannot work.
 
 ## Edge-to-edge
 
