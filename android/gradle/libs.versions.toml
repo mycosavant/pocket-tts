@@ -1,0 +1,25 @@
+[versions]
+agp = "8.7.3"
+kotlin = "2.0.21"
+coroutines = "1.9.0"
+sherpaOnnx = "1.13.6"
+
+[libraries]
+androidx-core-ktx = { module = "androidx.core:core-ktx", version = "1.13.1" }
+androidx-appcompat = { module = "androidx.appcompat:appcompat", version = "1.7.0" }
+androidx-activity-ktx = { module = "androidx.activity:activity-ktx", version = "1.9.3" }
+androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version = "2.8.7" }
+androidx-preference-ktx = { module = "androidx.preference:preference-ktx", version = "1.2.1" }
+androidx-constraintlayout = { module = "androidx.constraintlayout:constraintlayout", version = "2.1.4" }
+androidx-recyclerview = { module = "androidx.recyclerview:recyclerview", version = "1.3.2" }
+material = { module = "com.google.android.material:material", version = "1.12.0" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+commons-compress = { module = "org.apache.commons:commons-compress", version = "1.27.1" }
+markwon-core = { module = "io.noties.markwon:core", version = "4.6.2" }
+
+junit = { module = "junit:junit", version = "4.13.2" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }

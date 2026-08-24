@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Pocket TTS</string>
+    <string name="engine_name">Pocket TTS</string>
+    <string name="read_aloud">Read aloud</string>
+    <string name="scratchpad">Scratchpad</string>
+    <string name="voices">Voices</string>
+
+    <string name="pause">Pause</string>
+    <string name="resume">Resume</string>
+    <string name="stop">Stop</string>
+    <string name="close">Close</string>
+    <string name="reading_aloud">Reading aloud</string>
+    <string name="playback_channel">Playback</string>
+
+    <string name="download_model">Download voice model</string>
+    <string name="model_ready">Voice model installed</string>
+    <string name="model_missing">The voice model has not been downloaded yet. It is a 98 MB download and unpacks to about 200 MB.</string>
+    <string name="downloading">Downloading… %1$d%%</string>
+    <string name="downloading_unknown">Downloading…</string>
+    <string name="preparing">Preparing…</string>
+
+    <string name="open_scratchpad">Open scratchpad</string>
+    <string name="choose_voice">Choose voice</string>
+    <string name="tts_settings">System text-to-speech settings</string>
+    <string name="tts_settings_hint">Select Pocket TTS as your preferred engine to use these voices in any app that reads text aloud.</string>
+    <string name="speed">Speed: %1$.2fx</string>
+    <string name="speak_code_blocks">Read code blocks aloud</string>
+    <string name="treat_as_markdown">Strip Markdown from selected text</string>
+
+    <string name="scratchpad_hint">Type or paste Markdown here…</string>
+    <string name="preview">Preview</string>
+    <string name="edit">Edit</string>
+    <string name="speak">Speak</string>
+    <string name="speak_selection">Speak selection</string>
+    <string name="clear">Clear</string>
+    <string name="import_voice">Import a voice from a wav file</string>
+    <string name="imported_voice">Imported: %1$s</string>
+    <string name="voice_import_failed">Could not read that file as a wav: %1$s</string>
+    <string name="error_generic">Something went wrong: %1$s</string>
+    <string name="nothing_to_read">No readable text in that selection.</string>
+</resources>

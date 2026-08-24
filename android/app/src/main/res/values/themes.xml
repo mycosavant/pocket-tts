@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.PocketTts" parent="Theme.Material3.DayNight">
+        <item name="android:statusBarColor">?attr/colorSurface</item>
+    </style>
+
+    <!--
+        The read-aloud sheet floats over whatever app the text was selected in,
+        so it must not paint a full-screen background over it.
+    -->
+    <style name="Theme.PocketTts.Transparent" parent="Theme.Material3.DayNight.Dialog">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+    </style>
+</resources>

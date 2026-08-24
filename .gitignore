@@ -89,3 +89,13 @@ QWEN.md
 voices
 
 italk.yaml
+
+# Android app
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/.kotlin/
+*.apk
+*.aab
