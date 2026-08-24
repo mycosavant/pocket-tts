@@ -39,4 +39,7 @@
     <string name="voice_import_failed">Could not read that file as a wav: %1$s</string>
     <string name="error_generic">Something went wrong: %1$s</string>
     <string name="nothing_to_read">No readable text in that selection.</string>
+    <string name="crash_title">Pocket TTS crashed last time</string>
+    <string name="crash_share">Share report</string>
+    <string name="crash_dismiss">Dismiss</string>
 </resources>

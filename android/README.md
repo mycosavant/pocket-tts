@@ -96,6 +96,20 @@ shipped a theme that supplied a decor action bar to screens that also called
 `setSupportActionBar`, which compiled, packaged, and then threw the moment
 either screen was opened. These tests fail on that.
 
+## When it crashes
+
+Sideloading onto a phone means no logcat within reach, and an app that dies
+silently reports exactly one bit: "it crashed". `debug/CrashLog` writes the last
+uncaught exception to app storage on the way down, and the next launch offers to
+share it. It chains to the previous handler rather than swallowing the crash, so
+the process still dies and the system dialog still appears - only the evidence
+survives.
+
+This does not catch native crashes. A segfault or an out-of-memory kill inside
+ONNX Runtime takes the process down without unwinding through the JVM, so an
+abrupt death with no report on the next launch points at the model rather than
+at app code.
+
 ## Edge-to-edge
 
 `targetSdk 35` means Android 15 lays every window out edge to edge, so the

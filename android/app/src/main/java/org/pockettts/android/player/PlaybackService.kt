@@ -6,9 +6,12 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +33,14 @@ class PlaybackService : Service() {
     private val scope = CoroutineScope(Dispatchers.Main.immediate)
     private var watcher: Job? = null
 
+    /**
+     * The reader is Idle both before an utterance starts and after it ends, and
+     * only the second one means "stop". The service is started before
+     * [Reader.speak] has had a chance to run, so without this the very first
+     * state the watcher sees would shut the service down again immediately.
+     */
+    private var readingBegan = false
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -47,10 +58,29 @@ class PlaybackService : Service() {
             }
         }
 
-        startForeground(NOTIFICATION_ID, buildNotification(paused = false))
+        // Going foreground is allowed to fail: the system refuses it outright
+        // when the app is judged to be in the background, and the exception is
+        // thrown straight out of onStartCommand where nothing catches it. Losing
+        // the notification means reading stops when the app is swapped away,
+        // which is a far better outcome than taking the process down mid-word.
+        val foreground = runCatching {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildNotification(paused = false),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+            )
+        }
+        if (foreground.isFailure) {
+            Log.w(TAG, "Could not go foreground; reading continues unprotected", foreground.exceptionOrNull())
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         if (watcher == null) {
             watcher = scope.launch {
                 Reader.state.collectLatest { state ->
+                    if (state !is Reader.State.Idle) readingBegan = true
                     when (state) {
                         is Reader.State.Speaking ->
                             notificationManager.notify(
@@ -64,7 +94,7 @@ class PlaybackService : Service() {
                                 buildNotification(paused = false),
                             )
 
-                        else -> stopSelf()
+                        else -> if (readingBegan) stopSelf()
                     }
                 }
             }
@@ -129,6 +159,7 @@ class PlaybackService : Service() {
         )
 
     companion object {
+        private const val TAG = "PlaybackService"
         private const val CHANNEL_ID = "playback"
         private const val NOTIFICATION_ID = 1
         private const val NOTIFICATION_PREVIEW_CHARS = 200

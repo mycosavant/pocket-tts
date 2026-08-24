@@ -10,12 +10,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.pockettts.android.R
 import org.pockettts.android.databinding.ActivityMainBinding
+import org.pockettts.android.debug.CrashLog
 import org.pockettts.android.engine.ModelManager
 import org.pockettts.android.engine.Settings
 import org.pockettts.android.engine.VoiceCatalog
@@ -88,6 +90,33 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refresh()
+        offerLastCrash()
+    }
+
+    /**
+     * A sideloaded app that dies has no logcat anyone can reach, so the last
+     * stack trace is offered here instead. Shown once and then cleared, so it
+     * does not nag after it has been read.
+     */
+    private fun offerLastCrash() {
+        val report = CrashLog.lastCrash(this) ?: return
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.crash_title)
+            .setMessage(report.lineSequence().take(CRASH_PREVIEW_LINES).joinToString("\n"))
+            .setPositiveButton(R.string.crash_share) { _, _ ->
+                CrashLog.clear(this)
+                startActivity(
+                    Intent.createChooser(
+                        Intent(Intent.ACTION_SEND)
+                            .setType("text/plain")
+                            .putExtra(Intent.EXTRA_SUBJECT, getString(R.string.crash_title))
+                            .putExtra(Intent.EXTRA_TEXT, report),
+                        getString(R.string.crash_share),
+                    ),
+                )
+            }
+            .setNegativeButton(R.string.crash_dismiss) { _, _ -> CrashLog.clear(this) }
+            .show()
     }
 
     private fun refresh() {
@@ -133,5 +162,10 @@ class MainActivity : AppCompatActivity() {
             }
             refresh()
         }
+    }
+
+    private companion object {
+        /** Enough of the report to recognise the failure without a wall of text. */
+        const val CRASH_PREVIEW_LINES = 14
     }
 }

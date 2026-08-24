@@ -30,14 +30,20 @@ import java.util.function.Consumer
  */
 object Glass {
 
-    /** Alpha for the panel when a real blur is rendering behind it. */
-    private const val ALPHA_BLURRED = 0.62f
+    /**
+     * Alpha for the panel when a real blur is rendering behind it. Low enough
+     * that the blur is doing the work rather than the fill - at higher values
+     * the panel reads as flat tint and you cannot tell blur is on at all.
+     */
+    private const val ALPHA_BLURRED = 0.30f
 
     /** Alpha when it is not, where the panel has to carry legibility alone. */
-    private const val ALPHA_OPAQUE = 0.97f
+    private const val ALPHA_OPAQUE = 0.92f
 
     private const val CORNER_RADIUS_DP = 28f
-    private const val BACKGROUND_BLUR_RADIUS_DP = 48f
+
+    /** Backdrop blur under the panel, the `backdrop-filter: blur()` equivalent. */
+    private const val BACKGROUND_BLUR_RADIUS_DP = 20f
     private const val BEHIND_BLUR_RADIUS_DP = 20f
 
     /**
@@ -72,6 +78,10 @@ object Glass {
         window.setBackgroundDrawable(background)
 
         fun paint(blurred: Boolean) {
+            // Worth logging: when the system refuses blur the panel falls back
+            // to nearly opaque, which looks identical to the effect simply not
+            // having been implemented.
+            android.util.Log.i("Glass", if (blurred) "blur active" else "blur unavailable, using opaque panel")
             val alpha = if (blurred) ALPHA_BLURRED else ALPHA_OPAQUE
             background.fillColor = android.content.res.ColorStateList.valueOf(
                 ColorUtils.setAlphaComponent(surface, (alpha * 255).toInt()),
