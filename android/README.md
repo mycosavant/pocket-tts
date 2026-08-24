@@ -112,6 +112,23 @@ own record via `ApplicationExitInfo`, which names the kind of death and, for a
 native crash on Android 12+, carries the tombstone. That reason code is the fact
 that decides what to fix; the two sources are shown together on next launch.
 
+## The JNI callback is not a lambda, on purpose
+
+`PocketTts.audioCallback` wraps the streaming callback in an object expression
+rather than passing a lambda. sherpa-onnx resolves that callback from native
+code by name and exact signature - `invoke([F)Ljava/lang/Integer;`.
+
+Kotlin 2.0 emits lambdas via `invokedynamic`, and D8 desugars them into
+`$$ExternalSyntheticLambda` classes carrying only the erased
+`invoke(Object)Object`. The specialised method is absent, `GetMethodID` returns
+nothing, the JNI call proceeds with a pending exception, and the runtime aborts
+the process. It surfaces as `REASON_CRASH_NATIVE` with no Java stack trace, from
+code that is entirely ordinary Kotlin and compiles without a warning.
+
+Nothing in Kotlin references that signature, so nothing in Kotlin breaks when it
+disappears. `PocketTtsCallbackTest` asserts it by reflection and fails if the
+callback becomes a lambda again.
+
 ## Glass, and where it cannot exist
 
 Blurring depends entirely on what is behind the panel, and the two cases have

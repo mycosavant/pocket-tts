@@ -33,6 +33,17 @@ class ScratchpadActivity : AppCompatActivity() {
     private val markwon: Markwon by lazy { Markwon.create(this) }
     private var showingPreview = false
 
+    /**
+     * Whether the current utterance was started from this screen.
+     *
+     * The reader is process-wide, so selecting text inside the editor and using
+     * the tap-and-hold "Read aloud" item drives the same state this screen
+     * observes - which showed both that floating window and this overlay at
+     * once, two sets of pause and stop controls for one utterance. The overlay
+     * belongs to reads that began here.
+     */
+    private var startedHere = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -125,6 +136,7 @@ class ScratchpadActivity : AppCompatActivity() {
         }
 
         if (text.isBlank()) return
+        startedHere = true
         Reader.speak(this, text, treatAsMarkdown = true)
         PlaybackService.start(this)
     }
@@ -147,7 +159,8 @@ class ScratchpadActivity : AppCompatActivity() {
     }
 
     private fun renderReading(state: Reader.State) {
-        val reading = state !is Reader.State.Idle
+        if (state is Reader.State.Idle) startedHere = false
+        val reading = state !is Reader.State.Idle && startedHere
         binding.readingOverlay.visibility = if (reading) View.VISIBLE else View.GONE
         Glass.blur(binding.editorArea, if (reading) settings.glassBlurDp else 0f)
 

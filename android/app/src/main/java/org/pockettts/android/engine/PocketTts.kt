@@ -82,13 +82,16 @@ class PocketTts private constructor(
                 referenceAudio = voice.samples,
                 referenceSampleRate = voice.sampleRate,
             )
-            tts.generateWithConfigAndCallback(text, config) { samples ->
-                // sherpa-onnx reads this as "1 to keep going, 0 to stop".
-                if (onAudio(samples)) 1 else {
-                    completed = false
-                    0
-                }
-            }
+            tts.generateWithConfigAndCallback(
+                text,
+                config,
+                audioCallback { samples ->
+                    if (onAudio(samples)) true else {
+                        completed = false
+                        false
+                    }
+                },
+            )
             completed
         }
     }
@@ -101,6 +104,30 @@ class PocketTts private constructor(
     companion object {
         private const val TAG = "PocketTts"
         private const val MAX_PROMPT_SECONDS = 10f
+
+        /**
+         * Wraps the audio callback in a real class rather than a lambda.
+         *
+         * sherpa-onnx's JNI resolves this callback by name and exact signature -
+         * `invoke([F)Ljava/lang/Integer;`. Kotlin 2.0 compiles lambdas with
+         * `invokedynamic` by default, and D8 desugars those into
+         * `$$ExternalSyntheticLambda` classes carrying only the erased
+         * `invoke(Object)Object`. The specialised method the JNI looks for is
+         * simply absent, so `GetMethodID` fails, and because the JNI call
+         * proceeds with a pending exception the runtime aborts the process -
+         * a native crash with no Java stack trace, from ordinary Kotlin.
+         *
+         * An object expression generates an ordinary class with both the
+         * specialised method and its bridge, which is what the lookup needs.
+         * `PocketTtsCallbackTest` asserts that signature exists.
+         *
+         * @param onAudio returns true to keep generating, false to stop.
+         */
+        fun audioCallback(onAudio: (FloatArray) -> Boolean): Function1<FloatArray, Int> =
+            object : Function1<FloatArray, Int> {
+                // sherpa-onnx reads the result as "1 to keep going, 0 to stop".
+                override fun invoke(samples: FloatArray): Int = if (onAudio(samples)) 1 else 0
+            }
 
         @Volatile
         private var instance: PocketTts? = null
