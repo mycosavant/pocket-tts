@@ -13,12 +13,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.pockettts.android.engine.ModelManager
 import org.pockettts.android.engine.PocketTts
 import org.pockettts.android.engine.Settings
 import org.pockettts.android.engine.VoiceCatalog
 import org.pockettts.android.speech.MarkdownSpeech
 import org.pockettts.android.speech.TextChunker
-import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.coroutineContext
 
@@ -74,6 +74,9 @@ object Reader {
         voiceOverride: String? = null,
     ) {
         val appContext = context.applicationContext
+        // A voice sample auditioning in the picker must not talk over the thing
+        // the user actually asked to hear.
+        VoiceSample.stop()
         scope.launch {
             control.withLock {
                 stopLocked()
@@ -155,7 +158,7 @@ object Reader {
     ): PocketTts.LoadedVoice {
         VoiceCatalog.byId(voiceId)?.let { return engine.loadVoice(it) }
         // Not a stock voice, so it is one the user imported.
-        val imported = File(File(context.filesDir, "pocket-tts/voices"), "$voiceId.wav")
+        val imported = ModelManager(context).voiceFile(voiceId)
         if (imported.isFile) return engine.loadVoiceFile(voiceId, imported)
         return engine.loadVoice(VoiceCatalog.default())
     }

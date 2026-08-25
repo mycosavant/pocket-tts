@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="?attr/selectableItemBackground"
@@ -26,10 +27,42 @@
             android:textAppearance="?attr/textAppearanceBodySmall" />
     </LinearLayout>
 
+    <!--
+        Auditioning a voice and choosing it are separate actions, so the sample
+        button is its own target rather than a side effect of tapping the row.
+        The spinner replaces it while the prompt downloads, which on a first tap
+        is the only part with any latency.
+    -->
+    <FrameLayout
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="center_vertical">
+
+        <ImageButton
+            android:id="@+id/sample"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/play_sample"
+            android:scaleType="center"
+            android:src="@drawable/ic_play" />
+
+        <com.google.android.material.progressindicator.CircularProgressIndicator
+            android:id="@+id/sampleProgress"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_gravity="center"
+            android:indeterminate="true"
+            android:visibility="gone"
+            app:indicatorSize="24dp"
+            app:trackThickness="2dp" />
+    </FrameLayout>
+
     <RadioButton
         android:id="@+id/selected"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_gravity="center_vertical"
         android:clickable="false"
         android:focusable="false" />
 </LinearLayout>

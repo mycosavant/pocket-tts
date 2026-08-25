@@ -137,6 +137,9 @@ class ModelManager(private val context: Context) {
     fun cachedVoice(voice: VoiceCatalog.Voice): File? =
         File(voiceDir, voice.fileName).takeIf { it.isFile && it.length() > 0 }
 
+    /** Where the wav for [id] lives, whether it is a stock voice or an imported one. */
+    fun voiceFile(id: String): File = File(voiceDir, "$id.wav")
+
     fun importedVoices(): List<File> {
         val stock = VoiceCatalog.voices.map { it.fileName }.toSet()
         return voiceDir.listFiles()

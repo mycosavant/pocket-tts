@@ -88,7 +88,15 @@ class Settings(context: Context) {
          * the grid.
          */
         const val DEFAULT_GLASS_ALPHA = 0.67f
-        const val DEFAULT_GLASS_BLUR_DP = 48f
+
+        /**
+         * In dp, so the frosting looks the same on every density - but the
+         * kernel works in pixels, and on a 3x phone this is already 72 of them.
+         * CSS `backdrop-filter: blur(20px)` is the reference point and lands in
+         * the same neighbourhood; 48dp was 144px, which is less "frosted glass"
+         * than "lost the image entirely".
+         */
+        const val DEFAULT_GLASS_BLUR_DP = 24f
         const val DEFAULT_GLASS_DIM = 0.35f
         const val DEFAULT_GLASS_CORNER_DP = 28f
 

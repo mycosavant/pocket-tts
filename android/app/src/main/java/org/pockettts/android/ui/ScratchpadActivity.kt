@@ -84,9 +84,29 @@ class ScratchpadActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Coming back from the appearance screen must restyle an overlay that
+        // is already on screen, not wait for the next state change to do it.
+        if (binding.readingOverlay.visibility == View.VISIBLE) applyAppearance()
+    }
+
     override fun onPause() {
         super.onPause()
         settings.scratchpad = binding.editor.text.toString()
+    }
+
+    /** The editor stays sharp; the panel frosts only what sits behind it. */
+    private fun applyAppearance() {
+        binding.readingOverlay.backdrop = binding.editorArea
+        binding.readingOverlay.configure(
+            alpha = settings.glassAlpha,
+            blurDp = settings.glassBlurDp,
+            dim = settings.glassDim,
+            cornerDp = settings.glassCornerDp,
+            surface = Glass.surfaceColour(this),
+            outline = Glass.outlineColour(this),
+        )
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -164,15 +184,7 @@ class ScratchpadActivity : AppCompatActivity() {
         binding.readingOverlay.visibility = if (reading) View.VISIBLE else View.GONE
 
         if (!reading) return
-        // The editor stays sharp; the panel frosts only what sits behind it.
-        binding.readingOverlay.backdrop = binding.editorArea
-        binding.readingOverlay.configure(
-            alpha = settings.glassAlpha,
-            blurDp = settings.glassBlurDp,
-            cornerDp = settings.glassCornerDp,
-            surface = Glass.surfaceColour(this),
-            outline = Glass.outlineColour(this),
-        )
+        applyAppearance()
         when (state) {
             is Reader.State.Preparing -> {
                 binding.overlayStatus.setText(R.string.preparing)

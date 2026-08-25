@@ -45,6 +45,13 @@ class AppearanceActivity : AppCompatActivity() {
             },
         )
 
+        // The panel reports which branch it drew on every frame. Without this
+        // the capture can decline silently and the screen looks identical to
+        // one whose sliders are not wired up at all - which is exactly how the
+        // sibling-backdrop bug survived a release.
+        binding.previewPanel.onDrawModeChanged = { mode -> showDrawMode(mode) }
+        showDrawMode(binding.previewPanel.lastDraw)
+
         applyToSliders()
 
         onSlide(binding.alphaSlider) { settings.glassAlpha = it }
@@ -55,7 +62,14 @@ class AppearanceActivity : AppCompatActivity() {
         binding.copyButton.setOnClickListener { copyAsKotlin() }
         binding.resetButton.setOnClickListener {
             settings.resetGlass()
-            applyToSliders()
+            // The panel reports which branch it drew on every frame. Without this
+        // the capture can decline silently and the screen looks identical to
+        // one whose sliders are not wired up at all - which is exactly how the
+        // sibling-backdrop bug survived a release.
+        binding.previewPanel.onDrawModeChanged = { mode -> showDrawMode(mode) }
+        showDrawMode(binding.previewPanel.lastDraw)
+
+        applyToSliders()
             render()
         }
 
@@ -109,11 +123,29 @@ class AppearanceActivity : AppCompatActivity() {
         binding.previewPanel.configure(
             alpha = settings.glassAlpha,
             blurDp = settings.glassBlurDp,
+            dim = settings.glassDim,
             cornerDp = settings.glassCornerDp,
             surface = Glass.surfaceColour(this),
             outline = Glass.outlineColour(this),
         )
-        binding.previewBackdrop.alpha = 1f - settings.glassDim * DIM_PREVIEW_SCALE
+    }
+
+    private fun showDrawMode(mode: GlassPanelView.DrawMode) {
+        binding.drawMode.text = getString(
+            R.string.draw_mode,
+            getString(
+                when (mode) {
+                    GlassPanelView.DrawMode.BLURRED -> R.string.draw_blurred
+                    GlassPanelView.DrawMode.BELOW_API_31 -> R.string.draw_below_api_31
+                    GlassPanelView.DrawMode.SOFTWARE_CANVAS -> R.string.draw_software_canvas
+                    GlassPanelView.DrawMode.NO_BLUR_RADIUS -> R.string.draw_no_blur_radius
+                    GlassPanelView.DrawMode.NO_BACKDROP -> R.string.draw_no_backdrop
+                    GlassPanelView.DrawMode.BACKDROP_UNRELATED -> R.string.draw_backdrop_unrelated
+                    GlassPanelView.DrawMode.NOT_LAID_OUT -> R.string.draw_not_laid_out
+                    GlassPanelView.DrawMode.CAPTURE_FAILED -> R.string.draw_capture_failed
+                },
+            ),
+        )
     }
 
     private fun copyAsKotlin() {
@@ -126,13 +158,5 @@ class AppearanceActivity : AppCompatActivity() {
         getSystemService(ClipboardManager::class.java)
             ?.setPrimaryClip(ClipData.newPlainText(getString(R.string.appearance), snippet))
         Toast.makeText(this, R.string.copied, Toast.LENGTH_SHORT).show()
-    }
-
-    private companion object {
-        /**
-         * Dim applies to a whole window at runtime; in a 220dp preview the full
-         * amount would read as a black box, so it is shown proportionally.
-         */
-        const val DIM_PREVIEW_SCALE = 0.6f
     }
 }

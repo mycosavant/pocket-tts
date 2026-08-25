@@ -36,12 +36,18 @@ import androidx.core.graphics.ColorUtils
  *  1. record the backdrop view into a [RenderNode], offset so the slice sitting
  *     behind this panel lands at the panel's origin;
  *  2. hang a blur [RenderEffect] on that node, so only the captured slice blurs;
- *  3. draw the node clipped to the panel's rounded rect, then the tint, then the
- *     hairline - each of which is one layer of the glass.
+ *  3. draw the node clipped to the panel's rounded rect, then the dim, then the
+ *     tint, then the hairline - each of which is one layer of the glass.
  *
  * The capture is padded by the blur radius on every side. Without that the
  * kernel samples past the edge of what was recorded and the panel's border
  * smears into a pale halo.
+ *
+ * Every frame records why it drew what it drew, in [lastDraw]. That is not
+ * decoration: the capture has several ways to decline quietly, and on a
+ * sideloaded phone a log line is somewhere nobody can read it. A panel that
+ * silently fell back to a flat tint is indistinguishable from settings that do
+ * not work, which is exactly the confusion this field exists to end.
  */
 class GlassPanelView @JvmOverloads constructor(
     context: Context,
@@ -49,22 +55,62 @@ class GlassPanelView @JvmOverloads constructor(
     defStyleAttr: Int = 0,
 ) : LinearLayout(context, attrs, defStyleAttr) {
 
+    /** What the last frame actually did, and if it was not the blur, why not. */
+    enum class DrawMode {
+        /** The backdrop was captured and blurred. */
+        BLURRED,
+
+        /** No [RenderEffect] before Android 12. */
+        BELOW_API_31,
+
+        /** Drawing into a bitmap or a print job; [RenderNode] needs the GPU. */
+        SOFTWARE_CANVAS,
+
+        /** The blur radius is zero, so there is nothing to do. */
+        NO_BLUR_RADIUS,
+
+        /** No [backdrop] was assigned. */
+        NO_BACKDROP,
+
+        /** Panel and backdrop are in different view hierarchies. */
+        BACKDROP_UNRELATED,
+
+        /** Panel or backdrop has no size yet. */
+        NOT_LAID_OUT,
+
+        /** The capture threw; see the log for what. */
+        CAPTURE_FAILED,
+    }
+
     /**
-     * The view whose pixels are blurred. Must not be an ancestor of this panel:
-     * capturing a parent would recurse into capturing the panel itself.
+     * The view whose pixels are blurred. Normally a sibling: the panel must sit
+     * outside the backdrop, or capturing it would draw the panel into its own
+     * backdrop and recurse.
      */
     var backdrop: View? = null
         set(value) {
-            require(value == null || !isAncestor(value)) {
-                "backdrop must not contain the panel, or capturing it recurses"
+            require(value == null || (!isAncestor(value) && !isDescendant(value))) {
+                "backdrop must not contain the panel or be contained by it, or capturing it recurses"
             }
             field = value
             invalidate()
         }
 
+    /** What the last frame drew. Changes are reported via [onDrawModeChanged]. */
+    var lastDraw: DrawMode = DrawMode.NO_BACKDROP
+        private set
+
+    /**
+     * Notified when [lastDraw] changes. Delivered by [post] rather than inline,
+     * because a listener that touches the view tree during a draw pass would be
+     * modifying a hierarchy that is mid-traversal.
+     */
+    var onDrawModeChanged: ((DrawMode) -> Unit)? = null
+
     private var blurRadiusPx = 0f
     private var cornerRadiusPx = 0f
     private var tint = Color.TRANSPARENT
+    private var dimColour = Color.TRANSPARENT
     private var strokeColour = Color.TRANSPARENT
 
     private val node by lazy(LazyThreadSafetyMode.NONE) {
@@ -73,7 +119,12 @@ class GlassPanelView @JvmOverloads constructor(
     private val clip = Path()
     private val bounds = RectF()
     private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val tintPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    /** Scratch for the per-frame offset calculation; never escapes a draw. */
+    private val offset = FloatArray(2)
+    private val panelInRoot = FloatArray(2)
+    private val backdropInRoot = FloatArray(2)
 
     /**
      * The backdrop moving under the panel has to redraw it, otherwise the glass
@@ -81,10 +132,18 @@ class GlassPanelView @JvmOverloads constructor(
      */
     private val onScroll = ViewTreeObserver.OnScrollChangedListener { invalidate() }
 
-    fun configure(alpha: Float, blurDp: Float, cornerDp: Float, surface: Int, outline: Int) {
+    fun configure(
+        alpha: Float,
+        blurDp: Float,
+        dim: Float,
+        cornerDp: Float,
+        surface: Int,
+        outline: Int,
+    ) {
         blurRadiusPx = dp(blurDp)
         cornerRadiusPx = dp(cornerDp)
         tint = ColorUtils.setAlphaComponent(surface, (alpha.coerceIn(0f, 1f) * 255).toInt())
+        dimColour = ColorUtils.setAlphaComponent(Color.BLACK, (dim.coerceIn(0f, 1f) * 255).toInt())
         strokeColour = ColorUtils.setAlphaComponent(outline, STROKE_ALPHA)
         strokePaint.strokeWidth = resources.displayMetrics.density
         invalidate()
@@ -100,57 +159,67 @@ class GlassPanelView @JvmOverloads constructor(
         super.onDetachedFromWindow()
     }
 
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        bounds.set(0f, 0f, w.toFloat(), h.toFloat())
-        clip.reset()
-        clip.addRoundRect(bounds, cornerRadiusPx, cornerRadiusPx, Path.Direction.CW)
-    }
-
     override fun dispatchDraw(canvas: Canvas) {
-        // Rebuilt here rather than only in onSizeChanged, because the corner
-        // radius is a live setting and can change without the size doing so.
+        // Rebuilt every frame from the current size rather than cached in
+        // onSizeChanged: the corner radius is a live setting and can change
+        // without the size doing so, and a configure() that lands before the
+        // first layout would otherwise leave an empty clip and draw nothing.
+        bounds.set(0f, 0f, width.toFloat(), height.toFloat())
         clip.reset()
         clip.addRoundRect(bounds, cornerRadiusPx, cornerRadiusPx, Path.Direction.CW)
 
         canvas.save()
         canvas.clipPath(clip)
-        if (!drawBackdrop(canvas)) {
-            // No blur available: the tint alone has to carry legibility, so it
-            // is drawn opaque rather than leaving the content showing through
-            // sharp and unreadable behind the text.
-            canvas.drawColor(ColorUtils.setAlphaComponent(tint, OPAQUE_ALPHA))
-        }
+        val mode = drawBackdrop(canvas)
+        // Dim first, then tint: both sit over whatever is behind, whether that
+        // is the blurred capture above or the live content showing through.
+        fill(canvas, dimColour)
+        fill(canvas, tint)
         canvas.restore()
 
+        report(mode)
         drawHairline(canvas)
         super.dispatchDraw(canvas)
     }
 
-    /** @return true when a real blurred backdrop was drawn. */
-    private fun drawBackdrop(canvas: Canvas): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
-        if (!canvas.isHardwareAccelerated) return false
-        if (blurRadiusPx <= 0f) return false
-        val source = backdrop ?: return false
-        val target = node ?: return false
+    private fun drawBackdrop(canvas: Canvas): DrawMode {
+        // Ordered so the reason reported is the most specific one: how this
+        // panel is configured comes before what the device or the canvas can
+        // do, because the first is something the reader can act on.
+        if (blurRadiusPx <= 0f) return DrawMode.NO_BLUR_RADIUS
+        val source = backdrop ?: return DrawMode.NO_BACKDROP
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return DrawMode.BELOW_API_31
+        val target = node ?: return DrawMode.BELOW_API_31
+        if (width == 0 || height == 0 || source.width == 0 || source.height == 0) {
+            return DrawMode.NOT_LAID_OUT
+        }
+        if (!backdropOffset(source)) return DrawMode.BACKDROP_UNRELATED
+        // RenderNode recording needs a hardware canvas. Robolectric, a bitmap
+        // capture and the print pipeline all hand us a software one.
+        if (!canvas.isHardwareAccelerated) return DrawMode.SOFTWARE_CANVAS
 
-        return runCatching { captureAndDraw(canvas, source, target) }
-            .onFailure { Log.w(TAG, "Backdrop capture failed; falling back to a solid panel", it) }
-            .getOrDefault(false)
+        return runCatching {
+            captureAndDraw(canvas, source, target, offset[0], offset[1])
+            DrawMode.BLURRED
+        }.getOrElse {
+            Log.w(TAG, "Backdrop capture failed; falling back to a flat tint", it)
+            DrawMode.CAPTURE_FAILED
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
-    private fun captureAndDraw(canvas: Canvas, source: View, target: RenderNode): Boolean {
-        if (width == 0 || height == 0) return false
-
+    private fun captureAndDraw(
+        canvas: Canvas,
+        source: View,
+        target: RenderNode,
+        offsetX: Float,
+        offsetY: Float,
+    ) {
         // Padding the capture by the blur radius gives the kernel real pixels to
         // sample at the panel's edges instead of clamping on empty space.
         val pad = blurRadiusPx.toInt().coerceAtLeast(1)
         val captureWidth = width + pad * 2
         val captureHeight = height + pad * 2
-
-        val offset = offsetWithin(source) ?: return false
 
         target.setPosition(0, 0, captureWidth, captureHeight)
         target.setRenderEffect(
@@ -161,7 +230,7 @@ class GlassPanelView @JvmOverloads constructor(
         try {
             // Shift the source so the slice behind this panel lands at the
             // node's origin, with the pad exposed on every side.
-            recording.translate(-(offset[0] - pad).toFloat(), -(offset[1] - pad).toFloat())
+            recording.translate(pad - offsetX, pad - offsetY)
             source.draw(recording)
         } finally {
             target.endRecording()
@@ -171,10 +240,12 @@ class GlassPanelView @JvmOverloads constructor(
         canvas.translate(-pad.toFloat(), -pad.toFloat())
         canvas.drawRenderNode(target)
         canvas.restore()
+    }
 
-        tintPaint.color = tint
-        canvas.drawRect(bounds, tintPaint)
-        return true
+    private fun fill(canvas: Canvas, colour: Int) {
+        if (Color.alpha(colour) == 0) return
+        fillPaint.color = colour
+        canvas.drawRect(bounds, fillPaint)
     }
 
     private fun drawHairline(canvas: Canvas) {
@@ -192,25 +263,75 @@ class GlassPanelView @JvmOverloads constructor(
         )
     }
 
-    /** This panel's top-left in [ancestor]'s coordinates, or null if unrelated. */
-    private fun offsetWithin(ancestor: View): IntArray? {
-        var x = 0
-        var y = 0
-        var view: View = this
-        while (view !== ancestor) {
-            x += view.left - view.scrollX
-            y += view.top - view.scrollY
-            val parent = view.parent
-            if (parent !is ViewGroup) return null
-            view = parent
+    private fun report(mode: DrawMode) {
+        if (mode == lastDraw) return
+        lastDraw = mode
+        val listener = onDrawModeChanged ?: return
+        post { listener(mode) }
+    }
+
+    /**
+     * Writes this panel's top-left, in [source]'s own coordinates, into [offset].
+     *
+     * The backdrop is a sibling, not an ancestor - the panel has to stay outside
+     * it or capturing it recurses - so walking up the parent chain looking for
+     * the backdrop never finds it. Both views are instead located relative to
+     * the root they share, and the difference is taken. An earlier version did
+     * walk the parent chain, which meant this always failed and every panel fell
+     * back to a flat tint, no matter where the appearance sliders sat.
+     *
+     * @return false when the two views are not in the same hierarchy.
+     */
+    internal fun backdropOffset(source: View): Boolean {
+        val panelRoot = locationInRoot(this, panelInRoot)
+        val sourceRoot = locationInRoot(source, backdropInRoot)
+        if (panelRoot !== sourceRoot) return false
+        offset[0] = panelInRoot[0] - backdropInRoot[0]
+        offset[1] = panelInRoot[1] - backdropInRoot[1]
+        return true
+    }
+
+    /** Exposed for tests; the values are only meaningful straight after a call. */
+    internal val lastOffset: FloatArray get() = offset
+
+    /**
+     * Writes [view]'s top-left in the coordinates of its root into [out], and
+     * returns that root.
+     *
+     * `getLocationInWindow` would do this, but it returns (0, 0) for a view with
+     * no attach info, which silently turns "not attached yet" into "exactly on
+     * top of each other" - a wrong answer rather than no answer.
+     */
+    private fun locationInRoot(view: View, out: FloatArray): View {
+        var x = 0f
+        var y = 0f
+        var current: View = view
+        while (true) {
+            x += current.left + current.translationX
+            y += current.top + current.translationY
+            val parent = current.parent as? ViewGroup ?: break
+            x -= parent.scrollX
+            y -= parent.scrollY
+            current = parent
         }
-        return intArrayOf(x, y)
+        out[0] = x
+        out[1] = y
+        return current
     }
 
     private fun isAncestor(candidate: View): Boolean {
         var parent = this.parent
         while (parent != null) {
             if (parent === candidate) return true
+            parent = (parent as? View)?.parent
+        }
+        return false
+    }
+
+    private fun isDescendant(candidate: View): Boolean {
+        var parent = candidate.parent
+        while (parent != null) {
+            if (parent === this) return true
             parent = (parent as? View)?.parent
         }
         return false
@@ -225,8 +346,5 @@ class GlassPanelView @JvmOverloads constructor(
     private companion object {
         const val TAG = "GlassPanelView"
         const val STROKE_ALPHA = 90
-
-        /** Alpha for the tint when no blur is available behind it. */
-        const val OPAQUE_ALPHA = 242
     }
 }

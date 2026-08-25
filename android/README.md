@@ -35,7 +35,18 @@ table - a voice is a few seconds of reference audio the model conditions on - so
 the stock voices and a wav you record yourself are the same kind of thing. The
 voice picker lists the catalogue from
 [`kyutai/tts-voices`](https://huggingface.co/kyutai/tts-voices) and can import a
-local wav.
+local wav. Each row plays a short sample, because twenty one names tell you
+nothing about which one you want.
+
+The sample is the voice's own reference audio rather than a synthesised
+sentence. That is the most direct answer to "what does this sound like": the
+reference audio *is* the voice. It also costs nothing but the prompt download -
+no model bundle, no inference, no wait - so voices can be auditioned on a fresh
+install before the 98 MB model has ever been fetched, and the download it does
+is the same one selecting that voice would trigger later. The trade-off worth
+knowing: it is the raw prompt, so it carries the recording's own room and
+pacing. The synthesised voice tracks its timbre closely, which is the thing
+being chosen, but not its background.
 
 ## Building
 
@@ -88,6 +99,12 @@ other apps ─────▶ PocketTtsService ───┘      ▼
 
 `MarkdownSpeech`, `TextChunker` and `WavReader` are plain JVM code and are
 covered by unit tests in `app/src/test`.
+
+`GlassPanelViewTest` asserts the two things that were missing when the sliders
+went dead: where the panel thinks it is relative to its backdrop, and what
+colour it actually put on the canvas. Its predecessor asserted only that drawing
+did not throw, and Robolectric's software canvas made the panel bail before it
+ever reached the geometry - so the broken function was never called by any test.
 
 `ActivityLaunchTest` drives every activity through its real lifecycle under
 Robolectric, and forces a measure and layout pass at a realistic size. A theme,
@@ -153,7 +170,23 @@ Behind **our own content**, `ui/GlassPanelView` gives a true
 bounds and everything outside stays sharp. Each frame it records the backdrop
 view into a `RenderNode`, offset so the slice behind the panel lands at the
 panel's origin, hangs a blur `RenderEffect` on that node, and draws it clipped
-to the panel - then the tint, then the hairline.
+to the panel - then the dim, then the tint, then the hairline.
+
+That offset is the whole trick, and getting it wrong is silent. The panel has to
+sit *outside* the backdrop - capturing an ancestor would draw the panel into its
+own backdrop and recurse - so the backdrop is always a sibling. An earlier
+version located the panel by walking *up* its parent chain looking for the
+backdrop, which a sibling is never on: the walk ran off the top of the
+hierarchy, the capture declined, and every panel fell back to a flat tint with
+the configured opacity thrown away. The appearance sliders appeared to do
+nothing, because for three of the four that was exactly true. Both views are now
+located against the root they share and the difference is taken, which is
+correct for siblings, cousins and ancestors alike.
+
+Because that failure has no visual signature - a panel that quietly gave up
+looks like settings that were never wired - every frame records *why* it drew
+what it drew in `lastDraw`, and the appearance screen prints it. A log line is
+no use on a phone with no logcat within reach.
 
 An earlier version applied `RenderEffect` to the *backdrop view itself*, which
 is a different effect: CSS `filter: blur()` on the sibling. It softens the whole

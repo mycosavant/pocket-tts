@@ -27,10 +27,16 @@
         android:layout_width="match_parent"
         android:layout_height="220dp">
 
+        <!--
+            The backdrop needs a real background and hard-edged colour, not just
+            text on transparency: blurring a flat surface is a no-op by
+            definition, and the panel would look identical at every radius.
+        -->
         <LinearLayout
             android:id="@+id/previewBackdrop"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:background="?attr/colorSurfaceVariant"
             android:orientation="vertical"
             android:padding="16dp">
 
@@ -43,9 +49,41 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="4dp"
                 android:text="@string/preview_backdrop_body"
                 android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="12dp"
+                android:layout_weight="1"
+                android:orientation="horizontal">
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:background="?attr/colorPrimary" />
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:background="?attr/colorTertiaryContainer" />
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:background="?attr/colorSecondary" />
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:background="?attr/colorErrorContainer" />
+            </LinearLayout>
         </LinearLayout>
 
         <org.pockettts.android.ui.GlassPanelView
@@ -89,6 +127,14 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textAppearance="?attr/textAppearanceBodySmall" />
+
+            <TextView
+                android:id="@+id/drawMode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textAppearance="?attr/textAppearanceBodySmall"
+                android:textStyle="italic" />
 
             <View
                 android:layout_width="match_parent"
