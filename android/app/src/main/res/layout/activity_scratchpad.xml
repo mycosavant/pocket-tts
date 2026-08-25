@@ -63,7 +63,7 @@
     </ScrollView>
     </LinearLayout>
 
-        <LinearLayout
+        <org.pockettts.android.ui.GlassPanelView
             android:id="@+id/readingOverlay"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -104,7 +104,7 @@
                     android:layout_weight="1"
                     android:text="@string/stop" />
             </LinearLayout>
-        </LinearLayout>
+        </org.pockettts.android.ui.GlassPanelView>
     </FrameLayout>
 
     <LinearLayout

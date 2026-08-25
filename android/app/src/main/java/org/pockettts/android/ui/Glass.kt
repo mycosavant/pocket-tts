@@ -4,11 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
-import android.graphics.RenderEffect
-import android.graphics.Shader
 import android.os.Build
 import android.util.Log
-import android.util.TypedValue
 import android.view.View
 import android.view.Window
 import android.view.WindowManager
@@ -34,14 +31,15 @@ import java.util.function.Consumer
  *   across One UI, S24 Ultra included. On those devices this effect is simply
  *   unavailable and no radius or alpha will conjure it.
  *
- * - Behind our own content: `RenderEffect.createBlurEffect` blurs any view we
- *   own, on any API 31+ device, with no vendor opt-in. This is the same
- *   technique Haze uses on Android; Haze is Compose-only, so the technique is
- *   borrowed rather than the dependency.
+ * - Behind our own content: capturing the backdrop into a `RenderNode` and
+ *   blurring that works on any API 31+ device with no vendor opt-in. This is
+ *   the same technique Haze uses on Android; Haze is Compose-only, so the
+ *   technique is borrowed rather than the dependency.
  *
- * [applyToWindow] takes the first path, [blur] the second. Both read their
- * numbers from [Settings] so they can be tuned on the device instead of guessed
- * here.
+ * [applyToWindow] takes the first path. [GlassPanelView] takes the second, and
+ * is the one that produces a real `backdrop-filter` - blur confined to the
+ * panel's own bounds rather than smeared across the whole screen. Both read
+ * their numbers from [Settings] so they can be tuned on the device.
  */
 object Glass {
 
@@ -156,58 +154,22 @@ object Glass {
     }
 
     /**
-     * Blurs one of our own views, for an overlay drawn on top of it.
+     * Theme colours for a glass panel.
      *
-     * Works on every API 31+ device regardless of vendor blur support, which is
-     * what makes the in-app case succeed where the cross-app one cannot. The
-     * blurred view must not contain the overlay, or it blurs itself.
-     *
-     * @param radiusDp blur radius; 0 removes the effect.
+     * Read at draw time rather than baked into a drawable so the panel follows
+     * the wallpaper-derived dynamic palette.
      */
-    fun blur(view: View, radiusDp: Float) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        val radius = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            radiusDp,
-            view.resources.displayMetrics,
-        )
-        view.setRenderEffect(
-            if (radius <= 0f) {
-                null
-            } else {
-                // CLAMP repeats edge pixels outward; DECAL would fade the view's
-                // borders to transparent and betray the trick at the edges.
-                RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP)
-            },
-        )
-    }
+    fun surfaceColour(context: Context): Int = MaterialColors.getColor(
+        context,
+        com.google.android.material.R.attr.colorSurface,
+        Color.DKGRAY,
+    )
 
-    fun clearBlur(view: View) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) view.setRenderEffect(null)
-    }
-
-    /** Builds the rounded translucent surface used by in-app overlay panels. */
-    fun panelBackground(context: Context, alpha: Float, cornerDp: Float): MaterialShapeDrawable {
-        val density = context.resources.displayMetrics.density
-        val surface = MaterialColors.getColor(
-            context,
-            com.google.android.material.R.attr.colorSurface,
-            Color.DKGRAY,
-        )
-        val outline = MaterialColors.getColor(
-            context,
-            com.google.android.material.R.attr.colorOutlineVariant,
-            Color.GRAY,
-        )
-        return MaterialShapeDrawable(
-            ShapeAppearanceModel.builder().setAllCornerSizes(cornerDp * density).build(),
-        ).apply {
-            fillColor = ColorStateList.valueOf(
-                ColorUtils.setAlphaComponent(surface, (alpha.coerceIn(0f, 1f) * 255).toInt()),
-            )
-            setStroke(density, ColorUtils.setAlphaComponent(outline, STROKE_ALPHA))
-        }
-    }
+    fun outlineColour(context: Context): Int = MaterialColors.getColor(
+        context,
+        com.google.android.material.R.attr.colorOutlineVariant,
+        Color.GRAY,
+    )
 
     /** Alpha used when nothing is blurred behind the panel and it must carry legibility alone. */
     const val OPAQUE_FALLBACK_ALPHA = 0.94f

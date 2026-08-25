@@ -162,11 +162,17 @@ class ScratchpadActivity : AppCompatActivity() {
         if (state is Reader.State.Idle) startedHere = false
         val reading = state !is Reader.State.Idle && startedHere
         binding.readingOverlay.visibility = if (reading) View.VISIBLE else View.GONE
-        Glass.blur(binding.editorArea, if (reading) settings.glassBlurDp else 0f)
 
         if (!reading) return
-        binding.readingOverlay.background =
-            Glass.panelBackground(this, settings.glassAlpha, settings.glassCornerDp)
+        // The editor stays sharp; the panel frosts only what sits behind it.
+        binding.readingOverlay.backdrop = binding.editorArea
+        binding.readingOverlay.configure(
+            alpha = settings.glassAlpha,
+            blurDp = settings.glassBlurDp,
+            cornerDp = settings.glassCornerDp,
+            surface = Glass.surfaceColour(this),
+            outline = Glass.outlineColour(this),
+        )
         when (state) {
             is Reader.State.Preparing -> {
                 binding.overlayStatus.setText(R.string.preparing)

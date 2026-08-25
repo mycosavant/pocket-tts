@@ -102,11 +102,17 @@ class AppearanceActivity : AppCompatActivity() {
         binding.cornerLabel.text =
             getString(R.string.label_corner, GlassValues.cornerLabel(settings.glassCornerDp))
 
-        // Exactly what the overlay does: blur the backdrop, float an unblurred
-        // panel over it. Blurring the panel's own parent would blur the panel.
-        Glass.blur(binding.previewBackdrop, settings.glassBlurDp)
-        binding.previewPanel.background =
-            Glass.panelBackground(this, settings.glassAlpha, settings.glassCornerDp)
+        // The backdrop stays sharp. The panel blurs only the slice behind
+        // itself, which is what the real overlay does and what the CSS
+        // equivalent, backdrop-filter, means.
+        binding.previewPanel.backdrop = binding.previewBackdrop
+        binding.previewPanel.configure(
+            alpha = settings.glassAlpha,
+            blurDp = settings.glassBlurDp,
+            cornerDp = settings.glassCornerDp,
+            surface = Glass.surfaceColour(this),
+            outline = Glass.outlineColour(this),
+        )
         binding.previewBackdrop.alpha = 1f - settings.glassDim * DIM_PREVIEW_SCALE
     }
 

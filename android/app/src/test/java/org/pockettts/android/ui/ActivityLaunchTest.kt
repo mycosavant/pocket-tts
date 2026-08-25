@@ -40,8 +40,12 @@ import org.robolectric.annotation.Config
 class ActivityLaunchTest {
 
     /**
-     * Forces a measure and layout pass at a realistic size, so views that
-     * validate their configuration while sizing actually do it.
+     * Forces measure, layout and draw at a realistic size.
+     *
+     * Each phase catches a different class of failure, and reaching RESUMED
+     * catches none of them: views validate their configuration while sizing
+     * (this is where an off-grid `Slider` value throws), and custom views do
+     * their real work in draw. Stopping at `setup()` let both through.
      */
     private fun layOut(activity: android.app.Activity) {
         val root = activity.findViewById<android.view.View>(android.R.id.content)
@@ -50,6 +54,14 @@ class ActivityLaunchTest {
             android.view.View.MeasureSpec.makeMeasureSpec(2400, android.view.View.MeasureSpec.EXACTLY),
         )
         root.layout(0, 0, 1080, 2400)
+
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            1080,
+            2400,
+            android.graphics.Bitmap.Config.ARGB_8888,
+        )
+        root.draw(android.graphics.Canvas(bitmap))
+        bitmap.recycle()
     }
 
     @Test

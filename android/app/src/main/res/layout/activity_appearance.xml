@@ -48,7 +48,7 @@
                 android:textAppearance="?attr/textAppearanceBodyMedium" />
         </LinearLayout>
 
-        <LinearLayout
+        <org.pockettts.android.ui.GlassPanelView
             android:id="@+id/previewPanel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -69,7 +69,7 @@
                 android:layout_marginTop="4dp"
                 android:text="@string/preview_panel_body"
                 android:textAppearance="?attr/textAppearanceBodySmall" />
-        </LinearLayout>
+        </org.pockettts.android.ui.GlassPanelView>
     </FrameLayout>
 
     <ScrollView

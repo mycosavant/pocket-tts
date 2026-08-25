@@ -148,17 +148,28 @@ those devices the effect is unavailable and no radius or alpha will produce it,
 so the panel is drawn near-opaque instead of leaving unreadable text floating
 over someone else's app.
 
-Behind **our own content**, `RenderEffect.createBlurEffect` blurs any view we own
-on any Android 12 device with no vendor opt-in. This is why the scratchpad shows
-reading as an in-app overlay rather than a floating window: the overlay route can
-actually frost. It is the same technique [Haze](https://chrisbanes.github.io/haze/)
-uses on Android; Haze is Compose Multiplatform and this app is Views, so the
-technique is borrowed and the dependency is not.
+Behind **our own content**, `ui/GlassPanelView` gives a true
+`backdrop-filter: blur()`: the blur is confined to the panel's own rounded
+bounds and everything outside stays sharp. Each frame it records the backdrop
+view into a `RenderNode`, offset so the slice behind the panel lands at the
+panel's origin, hangs a blur `RenderEffect` on that node, and draws it clipped
+to the panel - then the tint, then the hairline.
+
+An earlier version applied `RenderEffect` to the *backdrop view itself*, which
+is a different effect: CSS `filter: blur()` on the sibling. It softens the whole
+screen and leaves the panel with no material of its own, because there is
+nothing left for it to blur. The capture is padded by the blur radius on every
+side, or the kernel samples past what was recorded and the panel's border smears
+into a halo.
+
+This is the technique [Haze](https://chrisbanes.github.io/haze/) uses on
+Android. Haze is Compose Multiplatform and this app is Views, so the technique
+is borrowed and the dependency is not.
 
 `ui/AppearanceActivity` exposes opacity, blur, dim and corner radius as sliders,
 because how this reads depends on the wallpaper-derived palette and the display
 density - neither of which can be judged from source. Every label reports the
-value in the form the source wants (`0.667f · alpha 170 · 67%`), and a button
+value in the form the source wants (`0.67f · alpha 171 · 67%`), and a button
 copies the whole set as pasteable Kotlin. It also states plainly which blur
 strategy is live on the device, so nobody spends an evening tuning a value that
 cannot work.
