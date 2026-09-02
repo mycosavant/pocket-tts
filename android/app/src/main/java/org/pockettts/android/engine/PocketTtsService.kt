@@ -123,6 +123,11 @@ class PocketTtsService : TextToSpeechService() {
             return
         }
 
+        // Claims the engine, so an in-app read standing on it gives way rather
+        // than the two of them taking turns sentence by sentence in two
+        // different voices. See EngineTurn.
+        val turn = EngineTurn.take()
+
         try {
             runBlocking {
                 val engine = PocketTts.get(this@PocketTtsService)
@@ -137,9 +142,10 @@ class PocketTtsService : TextToSpeechService() {
                 val maxBytes = callback.maxBufferSize
 
                 for (chunk in TextChunker.chunk(speakable)) {
-                    if (stopRequested.get()) break
+                    if (stopRequested.get() || EngineTurn.superseded(turn)) break
                     val completed = engine.synthesize(chunk.text, voice, speed) { samples ->
-                        if (stopRequested.get()) false else deliver(callback, samples, maxBytes)
+                        val giveUp = stopRequested.get() || EngineTurn.superseded(turn)
+                        if (giveUp) false else deliver(callback, samples, maxBytes)
                     }
                     if (!completed) break
                     if (chunk.trailingPauseSeconds > 0f) {

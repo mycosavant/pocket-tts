@@ -100,6 +100,23 @@ other apps ─────▶ PocketTtsService ───┘      ▼
 `MarkdownSpeech`, `TextChunker` and `WavReader` are plain JVM code and are
 covered by unit tests in `app/src/test`.
 
+## Two callers, one engine
+
+There is a single model in the process and two things drive it: the in-app
+reader, and the system text-to-speech service other apps call. `synthesize`
+serialised them per *chunk*, so with both active they took turns sentence by
+sentence and a passage came out read alternately in two different voices.
+Neither side knew the other existed.
+
+Serialising whole utterances instead would replace the alternation with a wait:
+an app asking through Select to Speak would hang until a whole document finished
+reading, which looks broken from the other side. So `engine/EngineTurn` makes
+the most recent request win. A caller takes a turn before it starts and checks
+it as it goes - per chunk and per audio callback, so a request arriving
+mid-sentence does not have to wait out the rest of it. Finding the turn has
+moved on means somebody asked more recently, and standing down is the only
+thing that produces intelligible audio.
+
 ## The reader has one state machine, and it is testable
 
 `Idle` used to mean two things - "nothing has been asked for" and "the read is

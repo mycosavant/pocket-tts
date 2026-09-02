@@ -20,6 +20,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.pockettts.android.engine.EngineTurn
 import org.robolectric.annotation.Config
 
 /**
@@ -48,6 +49,7 @@ class ReaderTest {
 
     @Before
     fun setUp() {
+        EngineTurn.resetForTesting()
         // The reader is a process-wide singleton, so without this one test's
         // terminal state is the next test's starting state.
         Reader.resetForTesting()
@@ -126,6 +128,10 @@ class ReaderTest {
         }
 
         val second = Reader.speak(context, "Another thing entirely.", treatAsMarkdown = false, source = Reader.Source.Scratchpad)
+        // Only once the handover has actually happened. Releasing the gate any
+        // earlier lets the first read finish on its own, and then the test is
+        // measuring a race rather than the handover.
+        awaitFor(second, "started") { true }
         engine.gate?.complete(Unit)
         awaitFor(second, "finished") { it is Reader.State.Finished }
         watcher.cancel()
@@ -230,6 +236,29 @@ class ReaderTest {
         Reader.skipForward()
         Reader.skipBack()
         assertEquals(Reader.State.Idle, Reader.state.value)
+    }
+
+    @Test
+    fun `a read stands down when something else claims the engine`() = runBlocking {
+        // The alternating-voices bug: the system engine and the in-app reader
+        // both drove the model, serialised per chunk, so one passage came out
+        // read alternately in two voices. Whoever asked most recently wins, and
+        // the loser has to actually stop rather than wait its turn again.
+        engine.gate = CompletableDeferred()
+        val id = Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Scratchpad)
+        awaitFor(id, "speaking") { it is Reader.State.Speaking }
+        val spokenBefore = engine.spoken.size
+
+        EngineTurn.take()
+        engine.gate?.complete(Unit)
+
+        val state = awaitFor(id, "stopped") { it is Reader.State.Stopped }
+        assertTrue(state.isTerminal)
+        // It gave up rather than reading on to the end of the passage.
+        assertTrue(
+            "kept synthesising after losing the engine",
+            engine.spoken.size < spokenBefore + 3,
+        )
     }
 
     @Test

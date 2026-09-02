@@ -16,6 +16,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
+import org.pockettts.android.engine.EngineTurn
 import org.pockettts.android.engine.Settings
 import org.pockettts.android.speech.MarkdownSpeech
 import org.pockettts.android.speech.TextChunker
@@ -155,6 +156,8 @@ object Reader {
      */
     private class Utterance(
         val id: Long,
+        /** This utterance's claim on the engine; see [EngineTurn]. */
+        val turn: Long,
         val source: Source,
         val speakable: String,
         val chunks: List<TextChunker.Chunk>,
@@ -313,6 +316,7 @@ object Reader {
             engine.useVoice(voiceOverride ?: settings.voiceId)
             val prepared = Utterance(
                 id = id,
+                turn = EngineTurn.take(),
                 source = source,
                 speakable = speakable,
                 chunks = TextChunker.chunk(speakable),
@@ -357,11 +361,18 @@ object Reader {
                     end = chunk.end,
                     paused = localPlayer.isPaused,
                 )
+                if (EngineTurn.superseded(current.turn)) {
+                    interrupted = true
+                    break
+                }
                 val spoke = current.engine.synthesize(
                     chunk.text,
                     current.speed,
                 ) { samples ->
-                    localPlayer.write(samples)
+                    // Checked per callback as well as per chunk: a request
+                    // arriving mid-sentence should not have to wait out the
+                    // rest of it.
+                    !EngineTurn.superseded(current.turn) && localPlayer.write(samples)
                 }
                 if (!spoke || !localPlayer.writeSilence(chunk.trailingPauseSeconds)) {
                     interrupted = true
@@ -369,7 +380,14 @@ object Reader {
                 }
             }
             localPlayer.drain()
-            if (!interrupted) _state.value = State.Finished(current.id, current.source)
+            when {
+                !interrupted -> _state.value = State.Finished(current.id, current.source)
+                // Losing the engine to a more recent request is an ending this
+                // read has to own; a sink stopped from inside belongs to
+                // whoever stopped it, and they publish their own state.
+                EngineTurn.superseded(current.turn) ->
+                    _state.value = State.Stopped(current.id, current.source)
+            }
         } catch (cancelled: CancellationException) {
             // The state belongs to whoever cancelled us - a handover leaves it
             // alone, an explicit stop sets Stopped.
