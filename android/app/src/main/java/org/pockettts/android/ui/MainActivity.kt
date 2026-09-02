@@ -106,6 +106,12 @@ class MainActivity : AppCompatActivity() {
      * own record, which is the only thing that sees a native crash, an ANR or a
      * low-memory kill. The platform record wins when both exist - it names the
      * kind of death, which is the part that decides what to do next.
+     *
+     * "Shown once" is enforced on dismissal rather than per button, because a
+     * dialog tapped away is still a dialog that was read. It used to be cleared
+     * only by the two buttons, and only for `CrashLog`, so the platform record
+     * came back on every single resume - returning from the voice picker was
+     * enough to raise the same report again.
      */
     private fun offerLastCrash() {
         val exit = ExitReasons.lastInterestingExit(this)
@@ -122,7 +128,6 @@ class MainActivity : AppCompatActivity() {
             .setTitle(title)
             .setMessage(report.lineSequence().take(CRASH_PREVIEW_LINES).joinToString("\n"))
             .setPositiveButton(R.string.crash_share) { _, _ ->
-                CrashLog.clear(this)
                 startActivity(
                     Intent.createChooser(
                         Intent(Intent.ACTION_SEND)
@@ -133,7 +138,11 @@ class MainActivity : AppCompatActivity() {
                     ),
                 )
             }
-            .setNegativeButton(R.string.crash_dismiss) { _, _ -> CrashLog.clear(this) }
+            .setNegativeButton(R.string.crash_dismiss, null)
+            .setOnDismissListener {
+                CrashLog.clear(this)
+                exit?.let { ExitReasons.markReported(this, it) }
+            }
             .show()
     }
 

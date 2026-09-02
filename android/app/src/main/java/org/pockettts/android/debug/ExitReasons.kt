@@ -1,6 +1,7 @@
 package org.pockettts.android.debug
 
 import android.app.ActivityManager
+import android.app.ActivityManager.RunningAppProcessInfo
 import android.app.ApplicationExitInfo
 import android.content.Context
 import android.os.Build
@@ -22,28 +23,72 @@ import java.util.Date
 object ExitReasons {
 
     /** A death worth telling the user about, already rendered for display. */
-    data class Report(val summary: String, val detail: String)
+    data class Report(val summary: String, val detail: String, val timestamp: Long)
 
     /**
-     * Deaths that mean something went wrong. A process that exited on request,
-     * or was trimmed while idle in the background, is ordinary housekeeping and
-     * is not worth surfacing.
+     * Deaths that always mean something went wrong, whatever the app was doing.
      */
-    private val INTERESTING = setOf(
+    private val ALWAYS_REPORT = setOf(
         ApplicationExitInfo.REASON_CRASH,
         ApplicationExitInfo.REASON_CRASH_NATIVE,
         ApplicationExitInfo.REASON_ANR,
-        ApplicationExitInfo.REASON_LOW_MEMORY,
-        ApplicationExitInfo.REASON_SIGNALED,
         ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE,
-        ApplicationExitInfo.REASON_PERMISSION_CHANGE,
         ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
     )
+
+    /**
+     * Deaths that are a failure or a non-event depending entirely on what the
+     * process was doing at the time.
+     *
+     * Android reclaims cached background processes constantly; that is the
+     * memory manager working, not the app breaking. Several OEM task killers
+     * report the same housekeeping as `SIGNALED`. Being killed *while reading
+     * aloud* is a different matter and worth saying out loud.
+     */
+    private val REPORT_IF_FOREGROUND = setOf(
+        ApplicationExitInfo.REASON_LOW_MEMORY,
+        ApplicationExitInfo.REASON_SIGNALED,
+    )
+
+    /**
+     * Whether an exit record deserves a dialog.
+     *
+     * Split out as a plain function of four numbers because this is the whole
+     * decision, and getting it wrong is expensive in both directions: too
+     * strict and a native crash goes unreported, too loose and the app cries
+     * wolf about routine background trims until nobody reads the dialog.
+     *
+     * [importance] is the process importance at the moment of death, and lower
+     * means more important - `IMPORTANCE_FOREGROUND` is 100, `IMPORTANCE_CACHED`
+     * is 400.
+     */
+    internal fun isWorthReporting(
+        reason: Int,
+        importance: Int,
+        timestamp: Long,
+        lastReported: Long,
+    ): Boolean {
+        if (timestamp <= lastReported) return false
+        if (reason in ALWAYS_REPORT) return true
+        return reason in REPORT_IF_FOREGROUND &&
+            importance <= RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE
+    }
 
     /** The most recent noteworthy death, or null if the last exit was unremarkable. */
     fun lastInterestingExit(context: Context): Report? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         return runCatching { readLastExit(context) }.getOrNull()
+    }
+
+    /**
+     * Records that [report] has been shown, so it is not shown again.
+     *
+     * Without this the platform's history is re-read on every resume and the
+     * same record produces the same dialog forever - returning from the voice
+     * picker was enough to raise it again.
+     */
+    fun markReported(context: Context, report: Report) {
+        prefs(context).edit().putLong(KEY_LAST_REPORTED, report.timestamp).apply()
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
@@ -54,13 +99,20 @@ object ExitReasons {
             /* pid = */ 0,
             MAX_RECORDS,
         )
-        val exit = history.firstOrNull { it.reason in INTERESTING } ?: return null
+        val lastReported = prefs(context).getLong(KEY_LAST_REPORTED, 0L)
+        val exit = history.firstOrNull {
+            isWorthReporting(it.reason, it.importance, it.timestamp, lastReported)
+        } ?: return null
 
         return Report(
             summary = summarise(exit),
             detail = describe(exit, CrashLog.deviceMetadata(context)),
+            timestamp = exit.timestamp,
         )
     }
+
+    private fun prefs(context: Context) = context.applicationContext
+        .getSharedPreferences("pocket-tts", Context.MODE_PRIVATE)
 
     /** One line naming what happened, which is usually the whole answer. */
     @RequiresApi(Build.VERSION_CODES.R)
@@ -150,6 +202,7 @@ object ExitReasons {
         else -> "UNKNOWN($reason)"
     }
 
+    private const val KEY_LAST_REPORTED = "exit_last_reported"
     private const val MAX_RECORDS = 5
     private const val TOMBSTONE_LINES = 120
 }
