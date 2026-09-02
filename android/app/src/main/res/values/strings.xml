@@ -46,6 +46,10 @@
 
     <!-- Voice samples. -->
     <!-- Moving around inside a read. -->
+    <string name="install_model">Install from a file</string>
+    <string name="installing_model">Unpacking the model…</string>
+    <string name="model_install_failed">Could not install that file: %1$s</string>
+
     <string name="skip_back">Back a sentence</string>
     <string name="skip_forward">Forward a sentence</string>
 

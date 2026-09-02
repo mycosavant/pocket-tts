@@ -1,6 +1,7 @@
 package org.pockettts.android.engine
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -9,6 +10,7 @@ import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -48,9 +50,11 @@ class ModelManager(private val context: Context) {
         val tokenScoresJson: File,
     )
 
-    fun resolveModelOrNull(): ModelFiles? {
-        if (!modelDir.isDirectory) return null
-        val files = modelDir.walkTopDown().filter { it.isFile }.toList()
+    fun resolveModelOrNull(): ModelFiles? = resolveModelIn(modelDir)
+
+    private fun resolveModelIn(directory: File): ModelFiles? {
+        if (!directory.isDirectory) return null
+        val files = directory.walkTopDown().filter { it.isFile }.toList()
         if (files.isEmpty()) return null
 
         fun pick(vararg stems: String): File? {
@@ -103,6 +107,44 @@ class ModelManager(private val context: Context) {
                 "Model bundle unpacked but the expected ONNX files were not found in $modelDir",
             )
         }
+
+    /**
+     * Installs the model from a bundle already on the device.
+     *
+     * The download is 98 MB and the app's whole point is that it works offline,
+     * so requiring a network round trip to get started is a poor first
+     * impression - and after an uninstall that discarded the model, an
+     * infuriating one. Anyone who has the release archive on a laptop can copy
+     * it across and point at it here.
+     *
+     * The same tar.bz2 as the download, streamed straight from the content URI
+     * rather than copied to a temporary file first: the unpacked model is
+     * already ~200 MB and there is no reason to want another 98 MB alongside it.
+     */
+    suspend fun installFromArchive(uri: Uri): ModelFiles = withContext(Dispatchers.IO) {
+        root.mkdirs()
+        val staging = File(root, "$MODEL_NAME.staging")
+        staging.deleteRecursively()
+        try {
+            val stream = context.contentResolver.openInputStream(uri)
+                ?: throw IOException("Could not read that file")
+            stream.use { extractTarBz2(it, staging) }
+
+            // Checked before anything is replaced: pointing at the wrong
+            // archive should leave a working install working.
+            if (resolveModelIn(staging) == null) {
+                throw IOException("That archive does not contain a Pocket TTS model")
+            }
+            modelDir.deleteRecursively()
+            if (!staging.renameTo(modelDir)) {
+                throw IOException("Could not move the unpacked model into place")
+            }
+        } finally {
+            staging.deleteRecursively()
+        }
+
+        resolveModelOrNull() ?: throw IOException("The model unpacked but its files were not found")
+    }
 
     /** Downloads a voice prompt if it is not already cached, and returns it. */
     suspend fun ensureVoice(
@@ -203,11 +245,14 @@ class ModelManager(private val context: Context) {
         }
     }
 
-    private fun extractTarBz2(archive: File, destination: File) {
+    private fun extractTarBz2(archive: File, destination: File) =
+        archive.inputStream().use { extractTarBz2(it, destination) }
+
+    private fun extractTarBz2(archive: InputStream, destination: File) {
         destination.mkdirs()
         val canonicalDestination = destination.canonicalFile
         TarArchiveInputStream(
-            BZip2CompressorInputStream(BufferedInputStream(archive.inputStream()), true),
+            BZip2CompressorInputStream(BufferedInputStream(archive), true),
         ).use { tar ->
             while (true) {
                 val entry = tar.nextEntry ?: break

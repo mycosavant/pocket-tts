@@ -7,9 +7,19 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+        hasFragileUserData asks, on uninstall, whether to keep the app's data.
+        Everything this app has lives in internal storage, so uninstalling threw
+        away a 200 MB download and - far worse - every voice the user had
+        recorded or imported, which exists nowhere else. The dialog is the only
+        way to offer that choice.
+    -->
     <application
         android:name=".PocketTtsApp"
         android:allowBackup="true"
+        android:hasFragileUserData="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"

@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -42,6 +43,12 @@ class MainActivity : AppCompatActivity() {
         settings = Settings(this)
 
         binding.downloadButton.setOnClickListener { startDownload() }
+        binding.installButton.setOnClickListener {
+            // Any type: the bundle arrives as a .tar.bz2 that most file
+            // providers report as application/octet-stream, or as nothing at
+            // all, and filtering on that hides the file the user came to pick.
+            pickModel.launch(arrayOf("*/*"))
+        }
         binding.chooseVoiceButton.setOnClickListener {
             startActivity(Intent(this, VoicePickerActivity::class.java))
         }
@@ -156,7 +163,35 @@ class MainActivity : AppCompatActivity() {
 
         val installed = ModelManager(this).isModelInstalled
         binding.modelStatus.setText(if (installed) R.string.model_ready else R.string.model_missing)
-        binding.downloadButton.isEnabled = !installed && download?.isActive != true
+        val busy = download?.isActive == true
+        binding.downloadButton.isEnabled = !installed && !busy
+        binding.installButton.isEnabled = !installed && !busy
+    }
+
+    private val pickModel = registerForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let { installModel(it) } }
+
+    /** Installs the model from a bundle the user already has on the device. */
+    private fun installModel(uri: Uri) {
+        if (download?.isActive == true) return
+        binding.downloadButton.isEnabled = false
+        binding.installButton.isEnabled = false
+        binding.downloadProgress.isIndeterminate = true
+        binding.downloadProgress.visibility = android.view.View.VISIBLE
+        binding.modelStatus.setText(R.string.installing_model)
+
+        download = lifecycleScope.launch {
+            val result = runCatching { ModelManager(this@MainActivity).installFromArchive(uri) }
+            binding.downloadProgress.visibility = android.view.View.GONE
+            result.onFailure {
+                binding.modelStatus.text = getString(
+                    R.string.model_install_failed,
+                    it.message ?: it.javaClass.simpleName,
+                )
+            }
+            refresh()
+        }
     }
 
     private fun startDownload() {

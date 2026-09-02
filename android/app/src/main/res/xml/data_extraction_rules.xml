@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 12 and newer.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <!--
+            The model is ~200 MB against a 25 MB quota, and it can be fetched
+            again. Everything else here is small and some of it cannot: a voice
+            the user recorded or imported exists nowhere but this directory, and
+            uninstalling used to take it with no warning and no way back.
+        -->
+        <exclude domain="file" path="pocket-tts/sherpa-onnx-pocket-tts-int8-2026-01-26" />
+    </cloud-backup>
+
+    <device-transfer>
+        <!--
+            Moving to a new phone has no size limit, but copying 200 MB of
+            regenerable weights over the wire to save one download is a poor
+            trade for the person waiting on the transfer.
+        -->
+        <exclude domain="file" path="pocket-tts/sherpa-onnx-pocket-tts-int8-2026-01-26" />
+    </device-transfer>
+</data-extraction-rules>

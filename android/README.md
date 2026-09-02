@@ -64,6 +64,28 @@ all of it the ONNX Runtime and sherpa-onnx native libraries for `arm64-v8a` and
 `armeabi-v7a`. Dropping `armeabi-v7a` from `abiFilters` in `app/build.gradle.kts`
 roughly halves that if you only care about 64-bit devices.
 
+## Keeping the model, and the voices
+
+Everything lives in internal storage, so uninstalling threw all of it away: a
+98 MB download, and - the part that matters - every voice the user had recorded
+or imported, which exists nowhere else. `android:hasFragileUserData` makes the
+uninstall dialog offer to keep the data, which is the only way to offer that
+choice at all.
+
+Backup rules exclude the unpacked model and nothing else. Cloud backup allows an
+app 25 MB, so including 200 MB of regenerable weights does not make a partial
+backup - it makes a failed one, taking the settings and the voices down with it.
+Those rules name the directory as a literal string because XML cannot reference
+a Kotlin constant, so `BackupRulesTest` asserts the string still matches
+`ModelManager.MODEL_NAME`. Renaming the bundle would otherwise break the
+exclusion silently.
+
+"Install from a file" takes the same `.tar.bz2` as the download, streamed
+straight from the content URI - the unpacked model is already 200 MB and there
+is no reason to want another 98 MB beside it. It is checked for the expected
+ONNX files before anything is replaced, so pointing at the wrong archive leaves
+a working install working.
+
 ## First run
 
 The model is not in the APK. On first launch the app downloads

@@ -51,6 +51,15 @@
                 android:layout_marginTop="12dp"
                 android:text="@string/download_model" />
 
+
+            <com.google.android.material.button.MaterialButton
+                style="@style/Widget.Material3.Button.TextButton"
+                android:id="@+id/installButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/install_model" />
+
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
