@@ -106,6 +106,17 @@ object Reader {
             val start: Int,
             val end: Int,
             val paused: Boolean,
+            /**
+             * Whether any sound has come out yet.
+             *
+             * The reader reaches this state when it starts *working on* a
+             * chunk, and the model composes a whole sentence before it emits a
+             * single sample. Reporting "Reading aloud" from the first moment
+             * meant the app claimed to be reading through the several seconds
+             * where it was silent - which is most of what the wait before the
+             * first word actually feels like.
+             */
+            val audible: Boolean,
         ) : State
 
         /** Read to the end. */
@@ -379,6 +390,7 @@ object Reader {
             // terminal state on the handover between two utterances - the same
             // bug the Idle-means-two-things design had, wearing a new hat.
             var interrupted = false
+            var audible = false
             for (index in from until current.chunks.size) {
                 val chunk = current.chunks[index]
                 coroutineContext.ensureActive()
@@ -391,6 +403,7 @@ object Reader {
                     start = chunk.start,
                     end = chunk.end,
                     paused = localPlayer.isPaused,
+                    audible = audible,
                 )
                 if (EngineTurn.superseded(current.turn)) {
                     interrupted = true
@@ -403,7 +416,16 @@ object Reader {
                     // Checked per callback as well as per chunk: a request
                     // arriving mid-sentence should not have to wait out the
                     // rest of it.
-                    !EngineTurn.superseded(current.turn) && localPlayer.write(samples)
+                    if (EngineTurn.superseded(current.turn)) return@synthesize false
+                    val written = localPlayer.write(samples)
+                    if (written && !audible) {
+                        audible = true
+                        // Said once, when it becomes true.
+                        (_state.value as? State.Speaking)
+                            ?.takeIf { it.utterance == current.id }
+                            ?.let { _state.value = it.copy(audible = true) }
+                    }
+                    written
                 }
                 if (!spoke || !localPlayer.writeSilence(chunk.trailingPauseSeconds)) {
                     interrupted = true

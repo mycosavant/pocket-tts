@@ -236,7 +236,9 @@ class ScratchpadActivity : AppCompatActivity() {
             is Reader.State.Finished, is Reader.State.Stopped -> Unit
 
             is Reader.State.Speaking -> {
-                binding.overlayStatus.setText(R.string.reading_aloud)
+                binding.overlayStatus.setText(
+                    if (state.audible) R.string.reading_aloud else R.string.composing,
+                )
                 binding.overlayPause.isEnabled = true
                 binding.overlayPause.setText(if (state.paused) R.string.resume else R.string.pause)
             }

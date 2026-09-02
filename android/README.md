@@ -117,10 +117,31 @@ other apps ─────▶ PocketTtsService ───┘      ▼
 - `player/StreamingPlayer` writes float PCM to an `AudioTrack` with blocking
   writes, which back-pressures generation to the speed of playback.
 - `player/PlaybackService` is a foreground service so reading survives the
-  floating window being dismissed.
+  floating window being dismissed, and holds audio focus for as long as it is
+  playing.
+- `player/AudioFocus` asks the system for the right to be heard and gives it
+  back. Without it the app read over whatever was already playing, a call did
+  not pause it - muting the media stream during a call is at the vendor's
+  discretion - and unplugging headphones carried on out loud from the phone's
+  speaker. A transient loss pauses and resumes; a permanent one stops, because
+  another app has taken over for as long as it likes and a paused reader nobody
+  asked for helps no one. Ducking is declined: two voices at once are not two
+  things you can listen to.
 
 `MarkdownSpeech`, `TextChunker` and `WavReader` are plain JVM code and are
 covered by unit tests in `app/src/test`.
+
+## Saying the true thing while waiting
+
+The model composes an entire sentence before it emits a single sample, so there
+are several silent seconds between asking for speech and hearing any. The reader
+reached `Speaking` when it started *working*, and every screen printed "Reading
+aloud" through that silence - which is most of what the wait before the first
+word actually feels like, and the reason it reads as broken rather than slow.
+
+`Speaking.audible` is false until a sample has actually been written, and the
+screens say "Composing the first sentence…" until it turns true. The wait did
+not get shorter; it stopped being a lie.
 
 ## Following along
 

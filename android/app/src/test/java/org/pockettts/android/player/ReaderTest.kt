@@ -239,6 +239,38 @@ class ReaderTest {
     }
 
     @Test
+    fun `it does not claim to be reading before any sound has come out`() = runBlocking {
+        // The model composes a whole sentence before emitting a sample, so
+        // there are several silent seconds after work starts. Saying "Reading
+        // aloud" through them is what made the wait feel broken rather than
+        // merely slow.
+        //
+        // Asserted over the sequence of states, collected unconfined. Waiting
+        // for the audible one instead would be a race: once the fake engine is
+        // ungated it runs to the end in microseconds, and StateFlow conflates.
+        val seen = mutableListOf<Reader.State>()
+        val watcher = CoroutineScope(Dispatchers.Unconfined).launch {
+            Reader.state.collect { seen += it }
+        }
+
+        engine.gate = CompletableDeferred()
+        val id = Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Scratchpad)
+        val silent = awaitFor(id, "speaking") { it is Reader.State.Speaking }
+        assertFalse(
+            "claimed to be audible before writing a sample",
+            (silent as Reader.State.Speaking).audible,
+        )
+
+        engine.gate?.complete(Unit)
+        awaitFor(id, "finished") { it is Reader.State.Finished }
+        watcher.cancel()
+
+        val speaking = seen.filterIsInstance<Reader.State.Speaking>().filter { it.utterance == id }
+        assertFalse("the first spoken state claimed to be audible", speaking.first().audible)
+        assertTrue("never became audible", speaking.any { it.audible })
+    }
+
+    @Test
     fun `a read stands down when something else claims the engine`() = runBlocking {
         // The alternating-voices bug: the system engine and the in-app reader
         // both drove the model, serialised per chunk, so one passage came out

@@ -153,7 +153,9 @@ class ReadAloudActivity : AppCompatActivity() {
 
             is Reader.State.Speaking -> {
                 binding.progress.visibility = View.GONE
-                binding.status.setText(R.string.reading_aloud)
+                binding.status.setText(
+                    if (state.audible) R.string.reading_aloud else R.string.composing,
+                )
                 // The sentence being spoken, not the whole passage: a preview
                 // that never moves says nothing about where the reader is.
                 sentenceOf(state)?.let { binding.preview.text = it }

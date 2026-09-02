@@ -44,6 +44,14 @@
 
     <!-- Voice samples. -->
     <!-- Moving around inside a read. -->
+    <!--
+        Not "Reading aloud": the model composes a whole sentence before it emits
+        a sample, so there are several silent seconds after the work starts, and
+        saying the wrong thing through them is what makes the wait feel broken
+        rather than merely slow.
+    -->
+    <string name="composing">Composing the first sentence…</string>
+
     <string name="install_model">Install from a file</string>
     <string name="installing_model">Unpacking the model…</string>
     <string name="model_install_failed">Could not install that file: %1$s</string>

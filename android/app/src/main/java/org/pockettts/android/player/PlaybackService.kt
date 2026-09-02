@@ -33,6 +33,15 @@ class PlaybackService : Service() {
     private val scope = CoroutineScope(Dispatchers.Main.immediate)
     private var watcher: Job? = null
 
+    /**
+     * Held for as long as this service is playing.
+     *
+     * The service already owns "reading is allowed to continue"; the right to
+     * be heard while doing it belongs in the same place, and is given back in
+     * onDestroy along with everything else.
+     */
+    private val focus by lazy { AudioFocus(this) }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -61,7 +70,7 @@ class PlaybackService : Service() {
             ServiceCompat.startForeground(
                 this,
                 NOTIFICATION_ID,
-                buildNotification(paused = false),
+                buildNotification(paused = false, audible = false),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
             )
         }
@@ -71,6 +80,8 @@ class PlaybackService : Service() {
             return START_NOT_STICKY
         }
 
+        focus.request()
+
         if (watcher == null) {
             watcher = scope.launch {
                 Reader.state.collectLatest { state ->
@@ -78,13 +89,13 @@ class PlaybackService : Service() {
                         is Reader.State.Speaking ->
                             notificationManager.notify(
                                 NOTIFICATION_ID,
-                                buildNotification(state.paused),
+                                buildNotification(state.paused, audible = state.audible),
                             )
 
                         is Reader.State.Preparing ->
                             notificationManager.notify(
                                 NOTIFICATION_ID,
-                                buildNotification(paused = false),
+                                buildNotification(paused = false, audible = false),
                             )
 
                         // Idle means the reader has not started yet - the
@@ -102,6 +113,7 @@ class PlaybackService : Service() {
     override fun onDestroy() {
         watcher?.cancel()
         watcher = null
+        focus.release()
         super.onDestroy()
     }
 
@@ -118,10 +130,12 @@ class PlaybackService : Service() {
         notificationManager.createNotificationChannel(channel)
     }
 
-    private fun buildNotification(paused: Boolean) =
+    private fun buildNotification(paused: Boolean, audible: Boolean) =
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(getString(R.string.reading_aloud))
+            .setContentTitle(
+                getString(if (audible) R.string.reading_aloud else R.string.composing),
+            )
             .setContentText(Reader.speakableText.take(NOTIFICATION_PREVIEW_CHARS))
             .setStyle(
                 NotificationCompat.BigTextStyle()
