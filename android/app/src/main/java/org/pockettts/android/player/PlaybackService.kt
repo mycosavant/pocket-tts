@@ -33,14 +33,6 @@ class PlaybackService : Service() {
     private val scope = CoroutineScope(Dispatchers.Main.immediate)
     private var watcher: Job? = null
 
-    /**
-     * The reader is Idle both before an utterance starts and after it ends, and
-     * only the second one means "stop". The service is started before
-     * [Reader.speak] has had a chance to run, so without this the very first
-     * state the watcher sees would shut the service down again immediately.
-     */
-    private var readingBegan = false
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -51,6 +43,8 @@ class PlaybackService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_TOGGLE_PAUSE -> Reader.togglePause()
+            ACTION_SKIP_BACK -> Reader.skipBack()
+            ACTION_SKIP_FORWARD -> Reader.skipForward()
             ACTION_STOP -> {
                 Reader.stop()
                 stopSelf()
@@ -80,7 +74,6 @@ class PlaybackService : Service() {
         if (watcher == null) {
             watcher = scope.launch {
                 Reader.state.collectLatest { state ->
-                    if (state !is Reader.State.Idle) readingBegan = true
                     when (state) {
                         is Reader.State.Speaking ->
                             notificationManager.notify(
@@ -94,7 +87,11 @@ class PlaybackService : Service() {
                                 buildNotification(paused = false),
                             )
 
-                        else -> if (readingBegan) stopSelf()
+                        // Idle means the reader has not started yet - the
+                        // service is deliberately started first, so that the
+                        // process is already protected when synthesis begins.
+                        // Only an utterance that actually ended means stop.
+                        else -> if (state.isTerminal) stopSelf()
                     }
                 }
             }
@@ -142,10 +139,22 @@ class PlaybackService : Service() {
                     PendingIntent.FLAG_IMMUTABLE,
                 ),
             )
+            // Back and forward first, so the two most-used controls sit where
+            // a media notification puts them.
+            .addAction(
+                R.drawable.ic_skip_previous,
+                getString(R.string.skip_back),
+                command(ACTION_SKIP_BACK),
+            )
             .addAction(
                 0,
                 getString(if (paused) R.string.resume else R.string.pause),
                 command(ACTION_TOGGLE_PAUSE),
+            )
+            .addAction(
+                R.drawable.ic_skip_next,
+                getString(R.string.skip_forward),
+                command(ACTION_SKIP_FORWARD),
             )
             .addAction(0, getString(R.string.stop), command(ACTION_STOP))
             .build()
@@ -165,6 +174,8 @@ class PlaybackService : Service() {
         private const val NOTIFICATION_PREVIEW_CHARS = 200
 
         const val ACTION_TOGGLE_PAUSE = "org.pockettts.android.TOGGLE_PAUSE"
+        const val ACTION_SKIP_BACK = "org.pockettts.android.SKIP_BACK"
+        const val ACTION_SKIP_FORWARD = "org.pockettts.android.SKIP_FORWARD"
         const val ACTION_STOP = "org.pockettts.android.STOP"
 
         fun start(context: Context) {

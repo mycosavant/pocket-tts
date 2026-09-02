@@ -4,12 +4,18 @@ import android.content.Intent
 import android.os.Build
 import androidx.appcompat.widget.Toolbar
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.CompletableDeferred
+import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.pockettts.android.R
+import org.pockettts.android.player.FakeEngine
+import org.pockettts.android.player.FakeSink
+import org.pockettts.android.player.Reader
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -38,6 +44,32 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [Build.VERSION_CODES.UPSIDE_DOWN_CAKE])
 class ActivityLaunchTest {
+
+    /**
+     * A fake engine, held mid-sentence.
+     *
+     * Two reasons. Any screen that starts a read used to reach the real
+     * engine, which meant `ensureModel` - so this suite quietly downloaded a
+     * 98 MB model bundle from GitHub on every run. And holding the read open
+     * is what lets a window be inspected while it is doing its job, rather
+     * than after it has correctly closed itself.
+     */
+    private val engine = FakeEngine()
+    private val gate = CompletableDeferred<Unit>()
+
+    @Before
+    fun useFakeEngine() {
+        Reader.resetForTesting()
+        engine.gate = gate
+        Reader.engines = FakeEngine.Factory(engine)
+        Reader.sinks = FakeSink.Factory()
+    }
+
+    @After
+    fun releaseReader() {
+        gate.complete(Unit)
+        Reader.resetForTesting()
+    }
 
     /**
      * Forces measure, layout and draw at a realistic size.
@@ -114,7 +146,11 @@ class ActivityLaunchTest {
             // without a window background the panel is invisible over the host
             // app, which is exactly what it looked like before.
             assertNotNull("read-aloud window has no background", activity.window.decorView.background)
-            assertFalse(activity.isFinishing)
+            // Still open, because the read it started is still going. The
+            // window closing once the read *ends* is the intended behaviour,
+            // so the engine is held mid-sentence rather than asserting the
+            // window never closes.
+            assertFalse("window closed while still reading", activity.isFinishing)
         }
     }
 

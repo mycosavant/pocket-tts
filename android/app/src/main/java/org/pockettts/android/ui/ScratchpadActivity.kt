@@ -30,19 +30,17 @@ class ScratchpadActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityScratchpadBinding
     private lateinit var settings: Settings
-    private val markwon: Markwon by lazy { Markwon.create(this) }
-    private var showingPreview = false
 
     /**
-     * Whether the current utterance was started from this screen.
+     * The read this screen started.
      *
-     * The reader is process-wide, so selecting text inside the editor and using
-     * the tap-and-hold "Read aloud" item drives the same state this screen
-     * observes - which showed both that floating window and this overlay at
-     * once, two sets of pause and stop controls for one utterance. The overlay
-     * belongs to reads that began here.
+     * The reader is process-wide, so this screen only claims the states of the
+     * utterance it asked for; another screen's read must not drive this
+     * overlay, and a previous read's ending must not dismiss it.
      */
-    private var startedHere = false
+    private var utterance: Long = 0
+    private val markwon: Markwon by lazy { Markwon.create(this) }
+    private var showingPreview = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -70,6 +68,8 @@ class ScratchpadActivity : AppCompatActivity() {
             },
         )
 
+        binding.overlayBack.setOnClickListener { Reader.skipBack() }
+        binding.overlayForward.setOnClickListener { Reader.skipForward() }
         binding.overlayPause.setOnClickListener { Reader.togglePause() }
         binding.overlayStop.setOnClickListener {
             Reader.stop()
@@ -156,8 +156,7 @@ class ScratchpadActivity : AppCompatActivity() {
         }
 
         if (text.isBlank()) return
-        startedHere = true
-        Reader.speak(this, text, treatAsMarkdown = true)
+        utterance = Reader.speak(this, text, treatAsMarkdown = true, source = Reader.Source.Scratchpad)
         PlaybackService.start(this)
     }
 
@@ -179,8 +178,17 @@ class ScratchpadActivity : AppCompatActivity() {
     }
 
     private fun renderReading(state: Reader.State) {
-        if (state is Reader.State.Idle) startedHere = false
-        val reading = state !is Reader.State.Idle && startedHere
+        // The reader is process-wide, so this screen only claims the reads that
+        // began here. That used to be a flag set on the Speak button and
+        // cleared when the state went Idle, which meant the overlay vanished
+        // whenever one utterance handed over to the next.
+        val mine = state.utterance == utterance && state.source == Reader.Source.Scratchpad
+        // A failure keeps the overlay up: it is the only place the reason is
+        // shown. Finishing and stopping take it away.
+        val reading = mine && when (state) {
+            is Reader.State.Preparing, is Reader.State.Speaking, is Reader.State.Failed -> true
+            is Reader.State.Finished, is Reader.State.Stopped, Reader.State.Idle -> false
+        }
         binding.readingOverlay.visibility = if (reading) View.VISIBLE else View.GONE
 
         if (!reading) return
@@ -190,6 +198,8 @@ class ScratchpadActivity : AppCompatActivity() {
                 binding.overlayStatus.setText(R.string.preparing)
                 binding.overlayPause.isEnabled = false
             }
+
+            is Reader.State.Finished, is Reader.State.Stopped -> Unit
 
             is Reader.State.Speaking -> {
                 binding.overlayStatus.setText(R.string.reading_aloud)

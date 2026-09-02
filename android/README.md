@@ -100,6 +100,33 @@ other apps ─────▶ PocketTtsService ───┘      ▼
 `MarkdownSpeech`, `TextChunker` and `WavReader` are plain JVM code and are
 covered by unit tests in `app/src/test`.
 
+## The reader has one state machine, and it is testable
+
+`Idle` used to mean two things - "nothing has been asked for" and "the read is
+over" - so `stopLocked` published it between two utterances, and three screens
+each kept a boolean to tell those apart. `StateFlow` conflates, so whether
+anyone saw that transitional value was a race: the scratchpad overlay sometimes
+failed to appear on a second Speak, and the foreground service sometimes
+stopped and immediately restarted.
+
+`Reader.State` now ends in `Finished`, `Stopped` or `Failed`, each carrying the
+utterance it belongs to and who asked for it. The three flags are gone. Identity
+matters as much as finality: the reader is process-wide, so a screen has to tell
+its own read's ending from an earlier one it never asked for - the floating
+window would otherwise close itself on stale news before its own read had begun.
+
+`player/SpeechEngine` and `player/AudioSink` exist so this can be tested at all.
+Before them, driving the reader meant a 98 MB model and an `AudioTrack`, which
+is why the part that had actually been wrong had no tests - and why
+`ActivityLaunchTest` reached `ensureModel` and quietly downloaded the model
+bundle on every run of the unit suite.
+
+Skipping is built on the same seam. An utterance keeps its chunks, its engine
+and its loaded voice, so back a sentence costs that sentence and nothing else:
+no re-selection, no reload. Back at the first sentence replays it; forward past
+the last one ends the read, which is what someone who keeps tapping forward
+means by it.
+
 `GlassPanelViewTest` asserts the two things that were missing when the sliders
 went dead: where the panel thinks it is relative to its backdrop, and what
 colour it actually put on the canvas. Its predecessor asserted only that drawing

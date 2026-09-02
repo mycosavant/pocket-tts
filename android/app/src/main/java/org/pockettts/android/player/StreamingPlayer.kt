@@ -14,16 +14,16 @@ import java.util.concurrent.atomic.AtomicBoolean
  * pressure we want: the model generates roughly as fast as the speaker drains,
  * and memory stays flat no matter how long the text is.
  */
-class StreamingPlayer(private val sampleRate: Int) {
+class StreamingPlayer(private val sampleRate: Int) : AudioSink {
 
     private var track: AudioTrack? = null
     private val stopped = AtomicBoolean(false)
     private val paused = AtomicBoolean(false)
     private val pauseLock = Object()
 
-    val isPaused: Boolean get() = paused.get()
+    override val isPaused: Boolean get() = paused.get()
 
-    fun start() {
+    override fun start() {
         check(track == null) { "StreamingPlayer already started" }
         val minBuffer = AudioTrack.getMinBufferSize(
             sampleRate,
@@ -60,7 +60,7 @@ class StreamingPlayer(private val sampleRate: Int) {
      *
      * @return false if playback was stopped and the caller should give up.
      */
-    fun write(samples: FloatArray): Boolean {
+    override fun write(samples: FloatArray): Boolean {
         val active = track ?: return false
         var offset = 0
         while (offset < samples.size) {
@@ -82,16 +82,16 @@ class StreamingPlayer(private val sampleRate: Int) {
     }
 
     /** Writes [seconds] of silence, for the gap between paragraphs. */
-    fun writeSilence(seconds: Float): Boolean {
+    override fun writeSilence(seconds: Float): Boolean {
         if (seconds <= 0f) return true
         return write(FloatArray((seconds * sampleRate).toInt()))
     }
 
-    fun pause() {
+    override fun pause() {
         if (paused.compareAndSet(false, true)) track?.pause()
     }
 
-    fun resume() {
+    override fun resume() {
         if (paused.compareAndSet(true, false)) {
             track?.play()
             synchronized(pauseLock) { pauseLock.notifyAll() }
@@ -99,7 +99,7 @@ class StreamingPlayer(private val sampleRate: Int) {
     }
 
     /** Blocks until everything already written has been played. */
-    fun drain() {
+    override fun drain() {
         val active = track ?: return
         if (stopped.get()) return
         // There is no "wait for drain" on a streaming AudioTrack, so wait out
@@ -122,7 +122,7 @@ class StreamingPlayer(private val sampleRate: Int) {
 
     private var writtenFrames: Long = 0
 
-    fun stop() {
+    override fun stop() {
         if (!stopped.compareAndSet(false, true)) return
         resume()
         track?.runCatching {
@@ -132,7 +132,7 @@ class StreamingPlayer(private val sampleRate: Int) {
         }
     }
 
-    fun release() {
+    override fun release() {
         stop()
         track?.release()
         track = null
@@ -146,7 +146,9 @@ class StreamingPlayer(private val sampleRate: Int) {
         }
     }
 
-    private companion object {
+    companion object : AudioSink.Factory {
+        override fun create(sampleRate: Int): AudioSink = StreamingPlayer(sampleRate)
+
         const val BYTES_PER_SAMPLE = 4
         const val BUFFER_MULTIPLIER = 4
         const val PAUSE_POLL_MILLIS = 200L

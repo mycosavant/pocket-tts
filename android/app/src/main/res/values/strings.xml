@@ -45,6 +45,10 @@
     <string name="appearance">Appearance</string>
 
     <!-- Voice samples. -->
+    <!-- Moving around inside a read. -->
+    <string name="skip_back">Back a sentence</string>
+    <string name="skip_forward">Forward a sentence</string>
+
     <string name="play_sample">Play a sample of this voice</string>
     <string name="stop_sample">Stop the sample</string>
     <string name="sample_while_reading">Stop reading before playing a sample.</string>

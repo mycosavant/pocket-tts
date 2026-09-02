@@ -28,11 +28,13 @@ class ReadAloudActivity : AppCompatActivity() {
     private lateinit var binding: ActivityReadAloudBinding
 
     /**
-     * The reader starts out Idle, and Idle is also how a finished utterance
-     * looks. Only the second one should close the window, so wait until the
-     * reader has actually left Idle before treating it as "done".
+     * The read this window started.
+     *
+     * The reader is process-wide and its state outlives any one utterance, so
+     * without this the window would act on the *previous* read's ending - which
+     * meant closing itself before its own read had begun.
      */
-    private var readingBegan = false
+    private var utterance: Long = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -78,7 +80,12 @@ class ReadAloudActivity : AppCompatActivity() {
 
         binding.preview.text = text
         val settings = Settings(this)
-        Reader.speak(this, text, treatAsMarkdown = settings.treatSelectionAsMarkdown)
+        utterance = Reader.speak(
+            this,
+            text,
+            treatAsMarkdown = settings.treatSelectionAsMarkdown,
+            source = Reader.Source.Selection,
+        )
         PlaybackService.start(this)
     }
 
@@ -102,7 +109,8 @@ class ReadAloudActivity : AppCompatActivity() {
     }
 
     private fun render(state: Reader.State) {
-        if (state !is Reader.State.Idle) readingBegan = true
+        // Anything that is not this window's own read is somebody else's news.
+        if (state.utterance != utterance) return
         when (state) {
             is Reader.State.Preparing -> {
                 binding.progress.visibility = View.VISIBLE
@@ -134,10 +142,18 @@ class ReadAloudActivity : AppCompatActivity() {
                 binding.pauseButton.isEnabled = false
             }
 
+            // The read is over, so the window has done its job. A failure is
+            // the exception: it stays up, because it is the only place the
+            // reason is shown.
+            is Reader.State.Finished, is Reader.State.Stopped -> {
+                binding.progress.visibility = View.GONE
+                binding.pauseButton.isEnabled = false
+                if (!isFinishing) finish()
+            }
+
             Reader.State.Idle -> {
                 binding.progress.visibility = View.GONE
                 binding.pauseButton.isEnabled = false
-                if (readingBegan && !isFinishing) finish()
             }
         }
     }

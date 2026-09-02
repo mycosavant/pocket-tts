@@ -1,0 +1,254 @@
+package org.pockettts.android.player
+
+import android.content.Context
+import android.os.Build
+import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import org.junit.After
+import org.junit.Before
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+/**
+ * The reader's state machine, which is the part that has actually been wrong.
+ *
+ * Every bug these cover was invisible before the [SpeechEngine] and [AudioSink]
+ * seams existed, because driving the reader meant downloading a 98 MB model and
+ * opening an `AudioTrack`. The specific failure they were written for: `Idle`
+ * meant both "not started" and "finished", so `stopLocked` published it on the
+ * way from one utterance to the next, and three screens each kept a boolean to
+ * paper over it. `StateFlow` conflates, so whether anyone saw that transitional
+ * `Idle` was a race - the scratchpad overlay sometimes failed to appear on a
+ * second Speak, and the foreground service sometimes stopped and immediately
+ * restarted.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [Build.VERSION_CODES.UPSIDE_DOWN_CAKE])
+class ReaderTest {
+
+    private val context = ApplicationProvider.getApplicationContext<Context>()
+    private val engine = FakeEngine()
+    private val engines = FakeEngine.Factory(engine)
+    private val sinks = FakeSink.Factory()
+
+    private val threeSentences = "One first thing. Two second thing. Three third thing."
+
+    @Before
+    fun setUp() {
+        // The reader is a process-wide singleton, so without this one test's
+        // terminal state is the next test's starting state.
+        Reader.resetForTesting()
+        Reader.engines = engines
+        Reader.sinks = sinks
+    }
+
+    @After
+    fun tearDown() {
+        Reader.resetForTesting()
+    }
+
+    /**
+     * Waits for a state, rather than guessing how long the reader needs.
+     *
+     * Real time on purpose: the reader runs on its own dispatchers, so a
+     * virtual-time test clock never advances and every wait times out at once.
+     */
+    private suspend fun await(what: String, predicate: (Reader.State) -> Boolean): Reader.State =
+        withTimeout(TIMEOUT_MS) {
+            Reader.state.first(predicate)
+        }.also { assertTrue("never reached $what (at $it)", predicate(it)) }
+
+    /**
+     * Waits for a state belonging to [utterance] specifically.
+     *
+     * Without the id a wait matches the *previous* read's ending, which is
+     * already in the flow - the same staleness that used to close the floating
+     * window before its own read had started.
+     */
+    private suspend fun awaitFor(
+        utterance: Long,
+        what: String,
+        predicate: (Reader.State) -> Boolean,
+    ): Reader.State = await("$what for utterance $utterance") {
+        it.utterance == utterance && predicate(it)
+    }
+
+    private suspend fun readToEnd(
+        text: String = threeSentences,
+        source: Reader.Source = Reader.Source.Scratchpad,
+    ): Long {
+        val id = Reader.speak(context, text, treatAsMarkdown = false, source = source)
+        awaitFor(id, "finished") { it is Reader.State.Finished }
+        return id
+    }
+
+    @Test
+    fun `a finished read is distinguishable from one that never started`() = runBlocking {
+        assertEquals(Reader.State.Idle, Reader.state.value)
+        readToEnd()
+        val state = Reader.state.value
+        assertTrue("expected Finished, got $state", state is Reader.State.Finished)
+        assertTrue(state.isTerminal)
+    }
+
+    @Test
+    fun `handing over to a second utterance never publishes a terminal state`() = runBlocking {
+        // The bug: stopLocked published Idle between utterances, so anything
+        // watching for "the read is over" tore down and immediately rebuilt.
+        //
+        // Collected unconfined so every emission is seen. StateFlow conflates,
+        // and conflation is exactly what made the original bug intermittent -
+        // a test that could miss the transitional state would sometimes pass
+        // against the broken code.
+        // Gated so the first utterance is still speaking when the second
+        // arrives; without it synthesis finishes in microseconds and the
+        // handover being tested never happens.
+        engine.gate = CompletableDeferred()
+        val first = Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Scratchpad)
+        awaitFor(first, "speaking") { it is Reader.State.Speaking }
+
+        val seen = mutableListOf<Reader.State>()
+        val watcher = CoroutineScope(Dispatchers.Unconfined).launch {
+            Reader.state.collect { seen += it }
+        }
+
+        val second = Reader.speak(context, "Another thing entirely.", treatAsMarkdown = false, source = Reader.Source.Scratchpad)
+        engine.gate?.complete(Unit)
+        awaitFor(second, "finished") { it is Reader.State.Finished }
+        watcher.cancel()
+
+        // One terminal state, at the very end, belonging to the second read.
+        // The handover contributes none.
+        assertEquals(
+            listOf(Reader.State.Finished(second, Reader.Source.Scratchpad)),
+            seen.filter { it.isTerminal },
+        )
+    }
+
+    @Test
+    fun `the state carries who asked, for the whole utterance`() = runBlocking {
+        engine.gate = CompletableDeferred()
+        val id = Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Scratchpad)
+        val speaking = awaitFor(id, "speaking") { it is Reader.State.Speaking }
+        engine.gate?.complete(Unit)
+        assertEquals(Reader.Source.Scratchpad, speaking.source)
+        awaitFor(id, "finished") { it is Reader.State.Finished }
+        assertEquals(Reader.Source.Scratchpad, Reader.state.value.source)
+    }
+
+    @Test
+    fun `stopping ends the read as stopped, not as finished`() = runBlocking {
+        engine.gate = CompletableDeferred()
+        val id = Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Selection)
+        awaitFor(id, "speaking") { it is Reader.State.Speaking }
+
+        Reader.stop()
+        engine.gate?.complete(Unit)
+        val state = awaitFor(id, "stopped") { it is Reader.State.Stopped }
+        assertEquals(Reader.Source.Selection, state.source)
+    }
+
+    @Test
+    fun `stopping before anything started does nothing`() = runBlocking {
+        Reader.stop()
+        assertEquals(Reader.State.Idle, Reader.state.value)
+    }
+
+    @Test
+    fun `a synthesis failure is terminal and carries the source`() = runBlocking {
+        val exploding = FakeEngine(failOn = "Boom.")
+        Reader.engines = FakeEngine.Factory(exploding)
+        val id = Reader.speak(context, "Boom.", treatAsMarkdown = false, source = Reader.Source.Scratchpad)
+        val state = awaitFor(id, "failed") { it is Reader.State.Failed }
+        assertTrue(state.isTerminal)
+        assertEquals(Reader.Source.Scratchpad, state.source)
+        Reader.engines = engines
+    }
+
+    @Test
+    fun `every utterance releases its sink`() = runBlocking {
+        readToEnd()
+        readToEnd("A second one.")
+        awaitUntil("both sinks released") { sinks.created.size == 2 }
+        assertEquals(2, sinks.created.size)
+        assertTrue(sinks.created.all { it.released == 1 })
+    }
+
+    @Test
+    fun `skipping back replays the sentence just read`() = runBlocking {
+        val id = readToEnd()
+        val beforeSkip = engine.spoken.size
+
+        Reader.skipBack()
+        awaitUntil("the skipped sentence was re-read") { engine.spoken.size > beforeSkip }
+        awaitFor(id, "finished after skip") { it is Reader.State.Finished }
+        // The last chunk again, and nothing before it re-synthesised.
+        assertEquals(beforeSkip + 1, engine.spoken.size)
+        assertEquals(engine.spoken[beforeSkip - 1], engine.spoken.last())
+    }
+
+    @Test
+    fun `skipping does not reload the engine or the voice`() = runBlocking {
+        // This is the whole point of retaining the utterance: skipping back a
+        // sentence should cost that sentence, not a model load.
+        val id = readToEnd()
+        val created = engines.created
+        val spoken = engine.spoken.size
+        Reader.skipBack()
+        awaitUntil("the skipped sentence was re-read") { engine.spoken.size > spoken }
+        awaitFor(id, "finished after skip") { it is Reader.State.Finished }
+        assertEquals(created, engines.created)
+    }
+
+    @Test
+    fun `skipping forward past the end finishes rather than hanging`() = runBlocking {
+        engine.gate = CompletableDeferred()
+        val id = Reader.speak(context, "Only one sentence here.", treatAsMarkdown = false, source = Reader.Source.Scratchpad)
+        awaitFor(id, "speaking") { it is Reader.State.Speaking }
+
+        Reader.skipForward()
+        engine.gate?.complete(Unit)
+        val state = awaitFor(id, "finished") { it is Reader.State.Finished }
+        assertTrue(state.isTerminal)
+    }
+
+    @Test
+    fun `skipping with nothing playing is ignored`() = runBlocking {
+        Reader.skipForward()
+        Reader.skipBack()
+        assertEquals(Reader.State.Idle, Reader.state.value)
+    }
+
+    @Test
+    fun `blank text finishes instead of leaving the reader hanging`() = runBlocking {
+        val id = Reader.speak(context, "   ", treatAsMarkdown = false, source = Reader.Source.Scratchpad)
+        awaitFor(id, "finished") { it is Reader.State.Finished }
+        assertFalse(Reader.isActive)
+    }
+
+    /** Polls [check], for the things that are true of the world rather than of one state. */
+    private suspend fun awaitUntil(what: String, check: () -> Boolean) {
+        withTimeout(TIMEOUT_MS) {
+            while (!check()) delay(POLL_MS)
+        }
+        assertTrue("never became true: $what", check())
+    }
+
+    private companion object {
+        const val TIMEOUT_MS = 10_000L
+        const val POLL_MS = 5L
+    }
+}
