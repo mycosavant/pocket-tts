@@ -11,6 +11,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -38,6 +39,17 @@ import kotlin.coroutines.coroutineContext
 object Reader {
 
     private const val TAG = "Reader"
+
+    /**
+     * How much of the voice already spoken is handed back as the prompt for
+     * the next sentence.
+     *
+     * Long enough to carry a speaker, short enough to be cheaper to encode
+     * than the ten-second voice prompt it replaces. The number itself is a
+     * guess that only an ear on a real device can settle, which is why the
+     * whole behaviour is a setting.
+     */
+    private const val CONTINUITY_SECONDS = 6f
 
     /**
      * Who asked for this utterance.
@@ -196,6 +208,13 @@ object Reader {
         val chunks: List<TextChunker.Chunk>,
         val engine: SpeechEngine,
         val speed: Float,
+        /**
+         * The last few seconds spoken, so the next chunk can continue the voice
+         * rather than sample a new one. On the utterance rather than on the
+         * play loop so that it survives a skip - skipping should move through
+         * the text, not restart the speaker.
+         */
+        val tail: AudioTail?,
     )
 
     @Volatile
@@ -245,6 +264,13 @@ object Reader {
     @VisibleForTesting
     fun resetForTesting() {
         runBlocking {
+            // The queued launches as well as the read in flight. speak() and
+            // skip() return before their coroutine has taken the control lock,
+            // so a read asked for by a test that ended early would otherwise
+            // begin during the next one - against its engine, its sink and its
+            // assertions. That is a whole class of confusing cross-test
+            // failures, and it does not belong to the test that reports it.
+            scope.coroutineContext.job.children.toList().forEach { it.cancelAndJoin() }
             control.withLock { stopLocked(ending = null) }
         }
         utterance = null
@@ -366,6 +392,11 @@ object Reader {
                 chunks = TextChunker.chunk(speakable),
                 engine = engine,
                 speed = settings.speed,
+                tail = if (settings.steadyVoice) {
+                    AudioTail((CONTINUITY_SECONDS * engine.sampleRate).toInt())
+                } else {
+                    null
+                },
             )
             utterance = prepared
             play(prepared, from = 0, askedAt = askedAt)
@@ -422,6 +453,12 @@ object Reader {
                     interrupted = true
                     break
                 }
+                // Continue the voice that has been speaking, rather than
+                // re-sampling one from the prompt for every sentence. Upstream
+                // names this as the fix for exactly this symptom; there is
+                // nothing to continue from before the first chunk has been
+                // spoken, and nothing at all when the setting is off.
+                current.engine.continueFrom(current.tail?.takeIf { !it.isEmpty }?.snapshot())
                 chunkStartedAt = System.currentTimeMillis()
                 val spoke = current.engine.synthesize(
                     chunk.text,
@@ -432,7 +469,10 @@ object Reader {
                     // rest of it.
                     if (EngineTurn.superseded(current.turn)) return@synthesize false
                     val written = localPlayer.write(samples)
-                    if (written) samplesProduced += samples.size
+                    if (written) {
+                        samplesProduced += samples.size
+                        current.tail?.append(samples)
+                    }
                     if (written && !audible) {
                         audible = true
                         askedAt?.let { Metrics.timeToFirstAudioMillis = System.currentTimeMillis() - it }

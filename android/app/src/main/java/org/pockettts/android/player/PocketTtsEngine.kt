@@ -13,10 +13,21 @@ class PocketTtsEngine(
 
     private var voice: PocketTts.LoadedVoice? = null
 
+    /** Reference audio to continue from, in place of the voice's prompt. */
+    private var continuation: PocketTts.LoadedVoice? = null
+
     override val sampleRate: Int get() = tts.sampleRate
 
     override suspend fun useVoice(voiceId: String) {
         voice = resolve(voiceId)
+        continuation = null
+    }
+
+    override fun continueFrom(audio: FloatArray?) {
+        // The samples come straight from this engine's own output, so they are
+        // already at the model's rate and need no conversion.
+        continuation = audio?.takeIf { it.isNotEmpty() }
+            ?.let { PocketTts.LoadedVoice(CONTINUATION_ID, it, tts.sampleRate) }
     }
 
     override suspend fun synthesize(
@@ -24,7 +35,9 @@ class PocketTtsEngine(
         speed: Float,
         onAudio: (FloatArray) -> Boolean,
     ): Boolean {
-        val loaded = voice ?: resolve(VoiceCatalog.DEFAULT_VOICE_ID).also { voice = it }
+        val loaded = continuation
+            ?: voice
+            ?: resolve(VoiceCatalog.DEFAULT_VOICE_ID).also { voice = it }
         return tts.synthesize(text, loaded, speed, onAudio)
     }
 
@@ -37,6 +50,14 @@ class PocketTtsEngine(
     }
 
     companion object : SpeechEngine.Factory {
+
+        /**
+         * Not a voice id anyone can select. [PocketTts.LoadedVoice] is keyed by
+         * id for the engine's voice cache, and this one must never land in it -
+         * it is different audio on every chunk.
+         */
+        private const val CONTINUATION_ID = "\u0000continuation"
+
         override suspend fun create(
             context: Context,
             progress: (Float) -> Unit,

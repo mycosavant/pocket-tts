@@ -86,6 +86,9 @@ class MainActivity : AppCompatActivity() {
         binding.codeBlocksSwitch.setOnCheckedChangeListener { _, checked ->
             settings.speakCodeBlocks = checked
         }
+        binding.steadyVoiceSwitch.setOnCheckedChangeListener { _, checked ->
+            settings.steadyVoice = checked
+        }
 
         requestNotificationPermission()
     }
@@ -175,6 +178,7 @@ class MainActivity : AppCompatActivity() {
         binding.speedLabel.text = getString(R.string.speed, settings.speed)
         binding.markdownSwitch.isChecked = settings.treatSelectionAsMarkdown
         binding.codeBlocksSwitch.isChecked = settings.speakCodeBlocks
+        binding.steadyVoiceSwitch.isChecked = settings.steadyVoice
 
         val installed = ModelManager(this).isModelInstalled
         binding.modelStatus.setText(if (installed) R.string.model_ready else R.string.model_missing)

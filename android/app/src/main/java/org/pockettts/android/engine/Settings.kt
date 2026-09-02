@@ -32,6 +32,24 @@ class Settings(context: Context) {
         get() = prefs.getBoolean(KEY_CODE_BLOCKS, false)
         set(value) = prefs.edit { putBoolean(KEY_CODE_BLOCKS, value) }
 
+    /**
+     * Whether each sentence is conditioned on the one before it.
+     *
+     * Pocket TTS is prompted with a few seconds of reference audio and samples
+     * a speaker in its neighbourhood, so the same prompt gives a slightly
+     * different voice every call - and a read is many calls, one per sentence.
+     * Handing the audio just spoken back as the prompt for the next sentence
+     * continues the voice instead of drawing a new one. Upstream names this as
+     * the fix, as a TODO against the same behaviour.
+     *
+     * A setting rather than a constant because the trade is real: conditioning
+     * on generated audio can also let the voice wander over a long read, and
+     * which of the two is worse can only be settled by listening.
+     */
+    var steadyVoice: Boolean
+        get() = prefs.getBoolean(KEY_STEADY_VOICE, true)
+        set(value) = prefs.edit { putBoolean(KEY_STEADY_VOICE, value) }
+
     /** Whether text arriving from other apps is treated as Markdown. */
     var treatSelectionAsMarkdown: Boolean
         get() = prefs.getBoolean(KEY_SELECTION_MARKDOWN, true)
@@ -103,6 +121,7 @@ class Settings(context: Context) {
         private const val KEY_THREADS = "threads"
         private const val KEY_CODE_BLOCKS = "speak_code_blocks"
         private const val KEY_SELECTION_MARKDOWN = "selection_markdown"
+        private const val KEY_STEADY_VOICE = "steady_voice"
         private const val KEY_SCRATCHPAD = "scratchpad"
         private const val KEY_GLASS_ALPHA = "glass_alpha"
         private const val KEY_GLASS_BLUR = "glass_blur_dp"
