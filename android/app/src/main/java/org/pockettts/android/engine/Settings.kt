@@ -81,24 +81,22 @@ class Settings(context: Context) {
         const val MAX_CORNER_DP = 48f
 
         /**
-         * AOSP's own window-blur sample uses alpha 170 of 255 with blur active,
-         * which is the anchor for this default. Written as 0.67 rather than
-         * 170f/255f so it lands on the appearance slider's 0.01 step grid -
-         * 0.6666667 does not, and Material's Slider throws on values that miss
-         * the grid.
+         * Dialled in on a device rather than guessed here, which is what the
+         * appearance screen exists for. These are the values that came back.
+         *
+         * The alpha is low because the panel it governs sits over the app's own
+         * content, where the blur behind it is real - it is the scratchpad
+         * overlay that uses these, not the sheet over another app, which is
+         * opaque by design because there is nothing behind it to frost.
+         *
+         * The alpha also has to land on the slider's 0.01 step grid: Material's
+         * Slider throws during layout on a value that misses it, which took the
+         * appearance screen down on open once already.
          */
-        const val DEFAULT_GLASS_ALPHA = 0.67f
-
-        /**
-         * In dp, so the frosting looks the same on every density - but the
-         * kernel works in pixels, and on a 3x phone this is already 72 of them.
-         * CSS `backdrop-filter: blur(20px)` is the reference point and lands in
-         * the same neighbourhood; 48dp was 144px, which is less "frosted glass"
-         * than "lost the image entirely".
-         */
-        const val DEFAULT_GLASS_BLUR_DP = 24f
-        const val DEFAULT_GLASS_DIM = 0.35f
-        const val DEFAULT_GLASS_CORNER_DP = 28f
+        const val DEFAULT_GLASS_ALPHA = 0.37f
+        const val DEFAULT_GLASS_BLUR_DP = 51f
+        const val DEFAULT_GLASS_DIM = 0f
+        const val DEFAULT_GLASS_CORNER_DP = 10f
 
         private const val KEY_VOICE = "voice"
         private const val KEY_SPEED = "speed"

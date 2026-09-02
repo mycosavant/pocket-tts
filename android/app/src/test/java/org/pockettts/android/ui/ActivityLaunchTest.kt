@@ -6,6 +6,7 @@ import androidx.appcompat.widget.Toolbar
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -18,6 +19,7 @@ import org.pockettts.android.player.FakeSink
 import org.pockettts.android.player.Reader
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
@@ -152,6 +154,50 @@ class ActivityLaunchTest {
             // window never closes.
             assertFalse("window closed while still reading", activity.isFinishing)
         }
+    }
+
+    @Test
+    fun `text selected inside the app is handed to the scratchpad, not a second window`() {
+        // The PROCESS_TEXT item this app registers appears in the selection
+        // toolbar of its own editor, so selecting text in the scratchpad used
+        // to open a floating window over the screen that already had controls
+        // for it: two sets of controls for one utterance, in two different
+        // treatments. The window steps aside and tags the read instead.
+        val intent = Intent(
+            ApplicationProvider.getApplicationContext(),
+            ReadAloudActivity::class.java,
+        ).apply {
+            action = Intent.ACTION_PROCESS_TEXT
+            type = "text/plain"
+            putExtra(Intent.EXTRA_PROCESS_TEXT, "A line from the scratchpad.")
+        }
+
+        val controller = Robolectric.buildActivity(ReadAloudActivity::class.java, intent)
+        val activity = controller.get()
+        shadowOf(activity).setCallingPackage(activity.packageName)
+        controller.setup().use {
+            assertTrue("window stayed open over our own screen", activity.isFinishing)
+        }
+        assertEquals(Reader.Source.Scratchpad, Reader.state.value.source)
+    }
+
+    @Test
+    fun `text selected in another app keeps the window`() {
+        val intent = Intent(
+            ApplicationProvider.getApplicationContext(),
+            ReadAloudActivity::class.java,
+        ).apply {
+            action = Intent.ACTION_PROCESS_TEXT
+            type = "text/plain"
+            putExtra(Intent.EXTRA_PROCESS_TEXT, "A line from somewhere else.")
+        }
+
+        val controller = Robolectric.buildActivity(ReadAloudActivity::class.java, intent)
+        shadowOf(controller.get()).setCallingPackage("com.example.browser")
+        controller.setup().use { c ->
+            assertFalse("window closed over another app", c.get().isFinishing)
+        }
+        assertEquals(Reader.Source.Selection, Reader.state.value.source)
     }
 
     /**

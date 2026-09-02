@@ -6,6 +6,7 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.os.Build
 import android.util.Log
+import android.view.Gravity
 import android.view.View
 import android.view.Window
 import android.view.WindowManager
@@ -72,11 +73,23 @@ object Glass {
     }
 
     /**
-     * Dresses a floating window as a glass panel.
+     * Dresses the read-aloud window as a card sitting at the bottom of the screen.
      *
-     * When cross-window blur is unavailable the same surface is drawn much more
-     * opaque: a barely-tinted panel with nothing blurred behind it is just
-     * unreadable text sitting on someone else's app.
+     * Opaque by design. A panel over another app can only be blurred by
+     * `Window.setBackgroundBlurRadius`, because an app may not read another
+     * app's pixels, and that API is gated on a vendor opt-in Samsung does not
+     * set - so on most devices there is nothing to frost and no value of any
+     * slider produces one. The earlier version pretended otherwise: it drew a
+     * near-transparent surface, discovered it could not blur, and painted a
+     * hard 0.94 instead, which silently overrode the opacity the user had
+     * chosen and looked like a blur that had failed.
+     *
+     * Where the platform really does support cross-window blur it is applied on
+     * top, and the surface steps back to the tuned opacity. That is a bonus on
+     * the devices that have it, not the design.
+     *
+     * Bottom gravity because a centred dialog covers the paragraph that was
+     * just selected - the one thing the reader may want to keep looking at.
      */
     fun applyToWindow(activity: Activity) {
         val window = activity.window
@@ -85,7 +98,7 @@ object Glass {
 
         val surface = MaterialColors.getColor(
             activity,
-            com.google.android.material.R.attr.colorSurface,
+            com.google.android.material.R.attr.colorSurfaceContainerHigh,
             Color.DKGRAY,
         )
         val outline = MaterialColors.getColor(
@@ -94,9 +107,17 @@ object Glass {
             Color.GRAY,
         )
 
+        window.setGravity(Gravity.BOTTOM)
+        window.setLayout(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+
+        val corner = settings.glassCornerDp * density
         val background = MaterialShapeDrawable(
             ShapeAppearanceModel.builder()
-                .setAllCornerSizes(settings.glassCornerDp * density)
+                // Square along the bottom edge: it is against the edge of the
+                // screen, and rounding a corner with nothing behind it just
+                // shows the app underneath through the gap.
+                .setTopLeftCornerSize(corner)
+                .setTopRightCornerSize(corner)
                 .build(),
         ).apply {
             setStroke(density, ColorUtils.setAlphaComponent(outline, STROKE_ALPHA))
@@ -104,11 +125,11 @@ object Glass {
         window.setBackgroundDrawable(background)
 
         fun paint(blurred: Boolean) {
-            val alpha = if (blurred) settings.glassAlpha else OPAQUE_FALLBACK_ALPHA
+            val alpha = if (blurred) settings.glassAlpha else 1f
             background.fillColor = ColorStateList.valueOf(
                 ColorUtils.setAlphaComponent(surface, (alpha * 255).toInt()),
             )
-            Log.i(TAG, if (blurred) "cross-window blur active" else "no cross-window blur; opaque panel")
+            Log.i(TAG, if (blurred) "cross-window blur active" else "opaque sheet; no cross-window blur")
         }
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
@@ -140,7 +161,7 @@ object Glass {
         paint(windowManager.isCrossWindowBlurEnabled)
 
         // Blur can be switched off under us - battery saver does it - so track
-        // it rather than sampling once and leaving the panel see-through.
+        // it rather than sampling once and leaving the sheet see-through.
         val listener = Consumer<Boolean> { enabled -> activity.runOnUiThread { paint(enabled) } }
         windowManager.addCrossWindowBlurEnabledListener(listener)
         window.decorView.addOnAttachStateChangeListener(
@@ -171,6 +192,4 @@ object Glass {
         Color.GRAY,
     )
 
-    /** Alpha used when nothing is blurred behind the panel and it must carry legibility alone. */
-    const val OPAQUE_FALLBACK_ALPHA = 0.94f
 }

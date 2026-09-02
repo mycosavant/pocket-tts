@@ -207,7 +207,12 @@ class ScratchpadActivity : AppCompatActivity() {
         // began here. That used to be a flag set on the Speak button and
         // cleared when the state went Idle, which meant the overlay vanished
         // whenever one utterance handed over to the next.
-        val mine = state.utterance == utterance && state.source == Reader.Source.Scratchpad
+        // Matched on source alone, not on the utterance this screen started:
+        // selecting text inside the editor goes out through the system's
+        // PROCESS_TEXT item and comes back tagged Scratchpad, and that read
+        // belongs to this overlay just as much as one from the Speak button.
+        val mine = state.source == Reader.Source.Scratchpad
+        if (mine) utterance = state.utterance
         // A failure keeps the overlay up: it is the only place the reason is
         // shown. Finishing and stopping take it away.
         val reading = mine && when (state) {

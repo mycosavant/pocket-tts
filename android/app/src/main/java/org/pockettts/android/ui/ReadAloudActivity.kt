@@ -44,6 +44,8 @@ class ReadAloudActivity : AppCompatActivity() {
         binding = ActivityReadAloudBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        binding.backButton.setOnClickListener { Reader.skipBack() }
+        binding.forwardButton.setOnClickListener { Reader.skipForward() }
         binding.pauseButton.setOnClickListener { Reader.togglePause() }
         binding.stopButton.setOnClickListener {
             Reader.stop()
@@ -80,12 +82,25 @@ class ReadAloudActivity : AppCompatActivity() {
 
         binding.preview.text = text
         val settings = Settings(this)
+
+        // Text selected inside our own scratchpad arrives here too: the
+        // PROCESS_TEXT item this app registers appears in the selection toolbar
+        // of its own editor. Opening a floating window over the screen that
+        // already has controls for this gave two sets of controls for one
+        // utterance, in two different treatments. Tag the read and step aside;
+        // the scratchpad shows its own overlay.
+        val fromOurselves = callingPackage == packageName
         utterance = Reader.speak(
             this,
             text,
             treatAsMarkdown = settings.treatSelectionAsMarkdown,
-            source = Reader.Source.Selection,
+            source = if (fromOurselves) Reader.Source.Scratchpad else Reader.Source.Selection,
         )
+        if (fromOurselves) {
+            PlaybackService.start(this)
+            finish()
+            return
+        }
         PlaybackService.start(this)
     }
 
@@ -98,6 +113,13 @@ class ReadAloudActivity : AppCompatActivity() {
             Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
             else -> ""
         }
+    }
+
+    /** The text of the chunk currently being spoken, if it can be located. */
+    private fun sentenceOf(state: Reader.State.Speaking): String? {
+        val spoken = Reader.speakableText
+        if (state.start !in 0..spoken.length || state.end !in state.start..spoken.length) return null
+        return spoken.substring(state.start, state.end).trim().ifBlank { null }
     }
 
     private fun observeReader() {
@@ -132,6 +154,9 @@ class ReadAloudActivity : AppCompatActivity() {
             is Reader.State.Speaking -> {
                 binding.progress.visibility = View.GONE
                 binding.status.setText(R.string.reading_aloud)
+                // The sentence being spoken, not the whole passage: a preview
+                // that never moves says nothing about where the reader is.
+                sentenceOf(state)?.let { binding.preview.text = it }
                 binding.pauseButton.isEnabled = true
                 binding.pauseButton.setText(if (state.paused) R.string.resume else R.string.pause)
             }

@@ -263,17 +263,28 @@ Behind **another app**, only `Window.setBackgroundBlurRadius` can blur, because
 an app may not read another app's pixels. That API is gated on a vendor opt-in
 (`ro.surface_flinger.supports_background_blur`) and Samsung does not set it -
 their [developer forum](https://forum.developer.samsung.com/t/why-does-oneui-not-support-crosswindowblur/34386)
-confirms cross-window blur is unsupported across One UI, S24 Ultra included. On
-those devices the effect is unavailable and no radius or alpha will produce it,
-so the panel is drawn near-opaque instead of leaving unreadable text floating
-over someone else's app.
+confirms cross-window blur is unsupported across One UI. So on most devices
+there is nothing behind that panel to frost, and no value of any setting will
+produce one.
+
+The read-aloud sheet used to pretend otherwise. It drew a near-transparent
+surface, found it could not blur, and painted a hard 0.94 instead - silently
+overriding the opacity that had been dialled in, and looking like a blur that
+had failed rather than like a decision. It is now an opaque Material card at the
+bottom of the screen: bottom, because a centred dialog lands on the paragraph
+that was just selected, which is the one thing the reader may want to keep
+looking at. Where the platform genuinely supports cross-window blur it is
+applied on top and the surface steps back to the tuned opacity - a bonus on the
+devices that have it, not the design.
 
 Behind **our own content**, `ui/GlassPanelView` gives a true
 `backdrop-filter: blur()`: the blur is confined to the panel's own rounded
 bounds and everything outside stays sharp. Each frame it records the backdrop
 view into a `RenderNode`, offset so the slice behind the panel lands at the
 panel's origin, hangs a blur `RenderEffect` on that node, and draws it clipped
-to the panel - then the dim, then the tint, then the hairline.
+to the panel - then the dim, then the tint, then the hairline. This works on any
+Android 12 device with no vendor opt-in, so the scratchpad overlay is where the
+glass lives.
 
 That offset is the whole trick, and getting it wrong is silent. The panel has to
 sit *outside* the backdrop - capturing an ancestor would draw the panel into its
@@ -291,13 +302,6 @@ looks like settings that were never wired - every frame records *why* it drew
 what it drew in `lastDraw`, and the appearance screen prints it. A log line is
 no use on a phone with no logcat within reach.
 
-An earlier version applied `RenderEffect` to the *backdrop view itself*, which
-is a different effect: CSS `filter: blur()` on the sibling. It softens the whole
-screen and leaves the panel with no material of its own, because there is
-nothing left for it to blur. The capture is padded by the blur radius on every
-side, or the kernel samples past what was recorded and the panel's border smears
-into a halo.
-
 This is the technique [Haze](https://chrisbanes.github.io/haze/) uses on
 Android. Haze is Compose Multiplatform and this app is Views, so the technique
 is borrowed and the dependency is not.
@@ -305,10 +309,21 @@ is borrowed and the dependency is not.
 `ui/AppearanceActivity` exposes opacity, blur, dim and corner radius as sliders,
 because how this reads depends on the wallpaper-derived palette and the display
 density - neither of which can be judged from source. Every label reports the
-value in the form the source wants (`0.67f · alpha 171 · 67%`), and a button
-copies the whole set as pasteable Kotlin. It also states plainly which blur
-strategy is live on the device, so nobody spends an evening tuning a value that
-cannot work.
+value in the form the source wants (`0.37f · alpha 94 · 37%`), and a button
+copies the whole set as pasteable Kotlin. The defaults in `Settings` are the
+values that came back from a device that way.
+
+## Selecting text inside our own app
+
+The `PROCESS_TEXT` item this app registers appears in the selection toolbar of
+its own editor too, so selecting a line in the scratchpad opened the floating
+window over the screen that already had controls for it - two sets of controls
+for one utterance, in two different treatments, one of which could not frost.
+
+`ReadAloudActivity` checks `callingPackage`: called from ourselves, it tags the
+read as coming from the scratchpad, starts the service and finishes without ever
+showing a window. The scratchpad claims any read tagged that way, whichever
+route it arrived by.
 
 ## Edge-to-edge
 
