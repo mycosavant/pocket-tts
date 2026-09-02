@@ -2,6 +2,7 @@ package org.pockettts.android.player
 
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 
 /**
  * A [SpeechEngine] that produces a fixed number of samples per chunk instantly.
@@ -39,11 +40,22 @@ class FakeEngine(
         speed: Float,
         onAudio: (FloatArray) -> Boolean,
     ): Boolean {
+        // Deliberately not instant. A fake that returns before its caller can
+        // look at it hides every ordering bug in the tests that drive it: the
+        // reader publishes Speaking one line *before* it asks for a chunk, and
+        // an instant fake makes that gap unobservable here and observable in
+        // CI. Half a real sentence would be seconds; this is enough to keep
+        // the window open without slowing the suite.
+        delay(WORK_MILLIS)
         spoken += text
         conditionedOn += continuation
         if (text == failOn) throw IllegalStateException("synthesis exploded")
         gate?.await()
         return onAudio(FloatArray(sampleRate / 10))
+    }
+
+    private companion object {
+        const val WORK_MILLIS = 50L
     }
 
     class Factory(private val engine: SpeechEngine) : SpeechEngine.Factory {

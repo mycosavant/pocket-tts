@@ -7,10 +7,13 @@ import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -80,7 +83,24 @@ class TransportTest {
             source = Reader.Source.Scratchpad,
         )
         awaitFor(id, "speaking") { it is Reader.State.Speaking }
+        // Speaking is published when the reader starts *working on* a chunk,
+        // one line before it asks the engine for it. So the state alone does
+        // not mean the engine has been called, and a test that reads
+        // engine.spoken at that moment sometimes reads an empty list - which
+        // is how this failed in CI while passing here.
+        awaitUntil("the first chunk reached the engine") { engine.spoken.isNotEmpty() }
         return id
+    }
+
+    /** Polls [check], for what is true of the world rather than of one state. */
+    private suspend fun awaitUntil(what: String, check: () -> Boolean) {
+        try {
+            withTimeout(TIMEOUT_MS) {
+                while (!check()) delay(POLL_MS)
+            }
+        } catch (timeout: TimeoutCancellationException) {
+            fail("never became true: $what")
+        }
     }
 
     @Test
@@ -218,5 +238,6 @@ class TransportTest {
 
     private companion object {
         const val TIMEOUT_MS = 10_000L
+        const val POLL_MS = 5L
     }
 }

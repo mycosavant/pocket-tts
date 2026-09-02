@@ -11,6 +11,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Before
@@ -19,6 +20,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -191,9 +193,15 @@ class ReaderTest {
     fun `every utterance releases its sink`() = runBlocking {
         readToEnd()
         readToEnd("A second one.")
-        awaitUntil("both sinks released") { sinks.created.size == 2 }
+        // Polled on the release, not on the creation. A sink is released in
+        // the play loop's finally, which runs after the terminal state is
+        // published - so waiting for the second sink to exist and then
+        // asserting it has been released is waiting for the wrong thing, and
+        // passes only because the gap is usually short.
+        awaitUntil("both sinks released") {
+            sinks.created.size == 2 && sinks.created.all { it.released == 1 }
+        }
         assertEquals(2, sinks.created.size)
-        assertTrue(sinks.created.all { it.released == 1 })
     }
 
     @Test
@@ -373,12 +381,25 @@ class ReaderTest {
         awaitUntil("the reader went idle") { !Reader.isActive }
     }
 
-    /** Polls [check], for the things that are true of the world rather than of one state. */
+    /**
+     * Polls [check], for the things that are true of the world rather than of
+     * one state.
+     *
+     * The condition is not re-read after the loop. It used to be, as a belt to
+     * the timeout's braces, and that made the helper report a failure for a
+     * condition it had already seen come true - the reader is a process-wide
+     * singleton, so "no read is running" can go back to false between the loop
+     * and the assertion without this test having done anything wrong. A
+     * timeout is the only real failure here, and it says so plainly.
+     */
     private suspend fun awaitUntil(what: String, check: () -> Boolean) {
-        withTimeout(TIMEOUT_MS) {
-            while (!check()) delay(POLL_MS)
+        try {
+            withTimeout(TIMEOUT_MS) {
+                while (!check()) delay(POLL_MS)
+            }
+        } catch (timeout: TimeoutCancellationException) {
+            fail("never became true: $what")
         }
-        assertTrue("never became true: $what", check())
     }
 
     private companion object {
