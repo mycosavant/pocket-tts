@@ -23,6 +23,8 @@ class StreamingPlayer(private val sampleRate: Int) : AudioSink {
 
     override val isPaused: Boolean get() = paused.get()
 
+    override val underruns: Int get() = track?.underrunCount ?: 0
+
     override fun start() {
         check(track == null) { "StreamingPlayer already started" }
         val minBuffer = AudioTrack.getMinBufferSize(

@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.pockettts.android.debug.Metrics
 import java.io.File
 
 /**
@@ -175,7 +176,13 @@ class PocketTts private constructor(
                     provider = "cpu",
                 ),
             )
-            PocketTts(OfflineTts(assetManager = null, config = config), manager)
+            // Timed because the process is killed while cached routinely, and
+            // this is paid again on the next read. Whether that is worth
+            // holding the model in memory depends on the number.
+            val startedAt = System.currentTimeMillis()
+            val tts = OfflineTts(assetManager = null, config = config)
+            Metrics.modelLoadMillis = System.currentTimeMillis() - startedAt
+            PocketTts(tts, manager)
         }
     }
 }

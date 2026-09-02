@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 import org.pockettts.android.R
 import org.pockettts.android.databinding.ActivityMainBinding
 import org.pockettts.android.debug.CrashLog
+import org.pockettts.android.debug.Metrics
 import org.pockettts.android.debug.ExitReasons
 import org.pockettts.android.engine.ModelManager
 import org.pockettts.android.engine.Settings
@@ -43,6 +44,7 @@ class MainActivity : AppCompatActivity() {
         settings = Settings(this)
 
         binding.downloadButton.setOnClickListener { startDownload() }
+        binding.timingsButton.setOnClickListener { showTimings() }
         binding.installButton.setOnClickListener {
             // Any type: the bundle arrives as a .tar.bz2 that most file
             // providers report as application/octet-stream, or as nothing at
@@ -166,6 +168,36 @@ class MainActivity : AppCompatActivity() {
         val busy = download?.isActive == true
         binding.downloadButton.isEnabled = !installed && !busy
         binding.installButton.isEnabled = !installed && !busy
+    }
+
+    /**
+     * The engine's own numbers, read off the device that produced them.
+     *
+     * There is no emulator in the build environment, so timings cannot be
+     * measured anywhere but here. Showing them - and letting them be shared -
+     * is what turns a question about performance into an answer, the same way
+     * the exit report turned "it crashed" into a reason.
+     */
+    private fun showTimings() {
+        val report = "${Metrics.report()}\n\n" +
+            CrashLog.deviceMetadata(this).entries.joinToString("\n") { "${it.key}: ${it.value}" }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.timings)
+            .setMessage(report)
+            .setPositiveButton(R.string.timings_share) { _, _ ->
+                startActivity(
+                    Intent.createChooser(
+                        Intent(Intent.ACTION_SEND)
+                            .setType("text/plain")
+                            .putExtra(Intent.EXTRA_SUBJECT, getString(R.string.timings))
+                            .putExtra(Intent.EXTRA_TEXT, report),
+                        getString(R.string.timings_share),
+                    ),
+                )
+            }
+            .setNegativeButton(R.string.crash_dismiss, null)
+            .show()
     }
 
     private val pickModel = registerForActivityResult(

@@ -10,6 +10,14 @@ interface AudioSink {
 
     val isPaused: Boolean
 
+    /**
+     * Times the output ran dry, if the implementation can tell.
+     *
+     * The one number that settles whether synthesis is keeping up with
+     * playback; a fake has nothing to report.
+     */
+    val underruns: Int get() = 0
+
     fun start()
 
     /** @return false if playback was stopped and the caller should give up. */

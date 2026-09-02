@@ -16,6 +16,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicLong
+import org.pockettts.android.debug.Metrics
 import org.pockettts.android.engine.EngineTurn
 import org.pockettts.android.engine.Settings
 import org.pockettts.android.speech.MarkdownSpeech
@@ -350,6 +351,7 @@ object Reader {
             return
         }
 
+        val askedAt = System.currentTimeMillis()
         try {
             _state.value = State.Preparing(id, source, 0f)
             val engine = engines.create(context) { fraction ->
@@ -366,7 +368,7 @@ object Reader {
                 speed = settings.speed,
             )
             utterance = prepared
-            play(prepared, from = 0)
+            play(prepared, from = 0, askedAt = askedAt)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
@@ -375,8 +377,14 @@ object Reader {
         }
     }
 
-    /** Reads [current] from chunk [from] to the end. */
-    private suspend fun play(current: Utterance, from: Int) {
+    /**
+     * Reads [current] from chunk [from] to the end.
+     *
+     * [askedAt] is when speech was asked for, so the wait before the first
+     * sound can be measured rather than guessed at. A skip passes null: it
+     * resumes an utterance whose first-audio time is already known.
+     */
+    private suspend fun play(current: Utterance, from: Int, askedAt: Long? = null) {
         var localPlayer: AudioSink? = null
         try {
             localPlayer = sinks.create(current.engine.sampleRate).also {
@@ -391,6 +399,11 @@ object Reader {
             // bug the Idle-means-two-things design had, wearing a new hat.
             var interrupted = false
             var audible = false
+            var samplesProduced = 0L
+            // Timed on the first chunk only. After that the buffer is full and
+            // the blocking write makes every measurement come out at exactly
+            // real time, which measures the speaker rather than the model.
+            var chunkStartedAt = 0L
             for (index in from until current.chunks.size) {
                 val chunk = current.chunks[index]
                 coroutineContext.ensureActive()
@@ -409,6 +422,7 @@ object Reader {
                     interrupted = true
                     break
                 }
+                chunkStartedAt = System.currentTimeMillis()
                 val spoke = current.engine.synthesize(
                     chunk.text,
                     current.speed,
@@ -418,14 +432,23 @@ object Reader {
                     // rest of it.
                     if (EngineTurn.superseded(current.turn)) return@synthesize false
                     val written = localPlayer.write(samples)
+                    if (written) samplesProduced += samples.size
                     if (written && !audible) {
                         audible = true
+                        askedAt?.let { Metrics.timeToFirstAudioMillis = System.currentTimeMillis() - it }
                         // Said once, when it becomes true.
                         (_state.value as? State.Speaking)
                             ?.takeIf { it.utterance == current.id }
                             ?.let { _state.value = it.copy(audible = true) }
                     }
                     written
+                }
+                if (index == from) {
+                    val elapsed = System.currentTimeMillis() - chunkStartedAt
+                    val audioSeconds = samplesProduced.toFloat() / current.engine.sampleRate
+                    if (elapsed > 0) {
+                        Metrics.generationRealTimeFactor = audioSeconds / (elapsed / 1000f)
+                    }
                 }
                 if (!spoke || !localPlayer.writeSilence(chunk.trailingPauseSeconds)) {
                     interrupted = true
@@ -449,6 +472,7 @@ object Reader {
             Log.e(TAG, "Reading failed", error)
             _state.value = State.Failed(current.id, current.source, error.message ?: error.javaClass.simpleName)
         } finally {
+            localPlayer?.let { Metrics.underruns = it.underruns }
             localPlayer?.release()
             if (player === localPlayer) player = null
         }

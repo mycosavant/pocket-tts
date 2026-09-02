@@ -228,6 +228,29 @@ The layout pass is the part that earns its keep. Views validate themselves while
 sizing, so reaching RESUMED proves very little: the slider bug passed a version
 of these tests that stopped at `setup()`, because nothing had been laid out yet.
 
+## Measuring before optimising
+
+Inference is CPU-only and near real time, and every performance question about
+this app turns on timings that cannot be measured here - no emulator, no device.
+So `debug/Metrics` collects three numbers and the main screen shows them, with a
+share button, the way the exit report does.
+
+- **Time to first audio**, which is the wait everybody feels.
+- **Generation speed on the first chunk**, before the buffer fills and blocking
+  writes make every later measurement come out at exactly real time by
+  construction. Below 1.0 means the model cannot keep up with its own playback.
+- **Underruns**, which settle an open question. Synthesis blocks inside the
+  audio callback, so sherpa-onnx cannot begin the next sentence until the buffer
+  has drained to a couple of seconds; the prediction is a gap at every sentence
+  boundary, fixed by putting a channel between synthesis and the audio track.
+  That refactor is not written, deliberately. If underruns climb once per
+  sentence the theory holds; if they stay at zero it does not, and the fix would
+  have been a guess dressed as an improvement.
+
+An unmeasured value reports "not measured yet" rather than a confident zero, and
+`MetricsTest` enforces that. "0 underruns" from a session that never played
+anything reads as evidence and is not.
+
 ## When it crashes
 
 Sideloading onto a phone means no logcat within reach, and an app that dies
