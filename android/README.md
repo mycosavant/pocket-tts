@@ -21,7 +21,18 @@ entry as well.
 how to read text uses these voices: Select to Speak, Chrome's read-aloud, ebook
 readers, accessibility tools. None of them need to know this app exists. Audio
 is streamed back chunk by chunk as it is generated, so playback starts after the
-first sentence rather than the last one.
+first sentence rather than the last one, and each chunk is announced with
+`rangeStart` so callers that highlight along can.
+
+Text arriving through the engine is **not** rewritten. It was chosen by another
+app and is nearly always prose already; running it through the Markdown stripper
+took asterisks out of ordinary sentences, reshaped `snake_case` identifiers, and
+replaced links with nothing at all. An accessibility tool exists to say what is
+on the screen, and quietly deleting a URL from that is a false account of the
+content rather than a formatting choice. It is also what makes the offsets
+meaningful: strip the text and they no longer point anywhere the caller could
+highlight. The app's own screens still strip, because there the Markdown is the
+user's own and reading it as prose is the point.
 
 **A Markdown scratchpad.** Type or paste, hit speak. Markdown is stripped for
 speaking, so `## Heading` is spoken as "Heading" rather than "hash hash
