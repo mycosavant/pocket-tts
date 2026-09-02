@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 11 and older. Backup is opt-out by path here, so the model is named
+    and everything else travels.
+-->
+<full-backup-content>
+    <!--
+        The model is ~200 MB and can be downloaded again. Cloud backup allows an
+        app 25 MB, so including it does not make a partial backup - it makes a
+        failed one, taking the settings and the voices down with it.
+    -->
+    <exclude domain="file" path="pocket-tts/sherpa-onnx-pocket-tts-int8-2026-01-26" />
+</full-backup-content>

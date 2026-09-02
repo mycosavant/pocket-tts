@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        NoActionBar, deliberately: every screen supplies its own MaterialToolbar.
+        A theme that also hands out a decor action bar makes setSupportActionBar
+        throw, which takes the activity down on launch.
+    -->
+    <style name="Theme.PocketTts" parent="Theme.Material3.DayNight.NoActionBar">
+        <!--
+            targetSdk 35 means Android 15 lays every window out edge to edge, so
+            the bars are drawn over rather than beside the content. Painting them
+            transparent and paying the insets back as padding is the only way the
+            top of the screen stays reachable.
+        -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">?attr/isLightTheme</item>
+    </style>
+
+    <!--
+        The read-aloud sheet floats over whatever app the text was selected in.
+
+        It sits at the bottom, because a centred dialog lands on top of the
+        paragraph that was just selected - the one thing the reader might want
+        to keep looking at.
+
+        Its surface is opaque, and that is a decision rather than a fallback. A
+        panel over another app can only be blurred by the platform's
+        cross-window blur, which is gated on a vendor opt-in that Samsung does
+        not set on One UI, so on most devices there is nothing behind the glass
+        to frost. A design that depends on it looks like a blur that failed;
+        this one looks like what it is. Where the platform does support blur it
+        is applied on top, as a bonus. Real glass lives in the scratchpad, over
+        our own content, where it works everywhere.
+    -->
+    <style name="Theme.PocketTts.Sheet" parent="Theme.Material3.DayNight.Dialog">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.32</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+        <item name="android:windowMinWidthMajor">96%</item>
+        <item name="android:windowMinWidthMinor">100%</item>
+    </style>
+</resources>
