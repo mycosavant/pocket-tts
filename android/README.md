@@ -151,6 +151,20 @@ Nothing in Kotlin references that signature, so nothing in Kotlin breaks when it
 disappears. `PocketTtsCallbackTest` asserts it by reflection and fails if the
 callback becomes a lambda again.
 
+It then disappeared a second time, by a different route. R8 inlined the
+specialised method into its own bridge, leaving one method whose descriptor is
+`(Ljava/lang/Object;)Ljava/lang/Object;` - the reflective test still passed,
+because it reflects over the unshrunk class. Release builds have no CheckJNI, so
+instead of aborting they synthesised entire utterances into nowhere and reported
+a failure after a long silence. Nobody noticed for a simple reason: CI built
+only `assembleDebug`, so every APK ever sideloaded was a debug build.
+
+`proguard-rules.pro` now keeps the method, and `tools/check-jni-callback.sh`
+reads the built APK with `dexdump` and fails if no method declares that
+descriptor. Both APKs are built and checked in CI, and both are uploaded, so
+the shrunk build is something that gets installed rather than something that is
+assumed to work. The source is not the artefact, and only the artefact knows.
+
 ## Glass, and where it cannot exist
 
 Blurring depends entirely on what is behind the panel, and the two cases have

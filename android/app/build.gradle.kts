@@ -29,6 +29,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // Signed with the debug key so the shrunk build can actually be
+            // installed and tested. R8 is the part of the build no test sees,
+            // and it has already removed a JNI callback once; an artefact
+            // nobody can sideload is an artefact nobody checks. This is not a
+            // distribution key and this app is not distributed through a store.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

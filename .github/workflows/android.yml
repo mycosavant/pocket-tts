@@ -27,6 +27,20 @@ jobs:
     - name: Build debug APK
       working-directory: android
       run: ./gradlew --no-daemon :app:assembleDebug
+
+    # R8 is the part of the build nothing else here sees, and it has already
+    # deleted the JNI audio callback once - silently, in a build that compiled
+    # and passed every test. Build it and check the artefact, not the source.
+    - name: Build release APK
+      working-directory: android
+      run: ./gradlew --no-daemon :app:assembleRelease
+
+    - name: Check the JNI audio callback survived shrinking
+      working-directory: android
+      run: |
+        ./tools/check-jni-callback.sh app/build/outputs/apk/debug/app-debug.apk
+        ./tools/check-jni-callback.sh app/build/outputs/apk/release/app-release.apk
+
     # Every run of this workflow uploads an APK. Without the commit in the
     # name they are indistinguishable in the Actions list, and it is very easy
     # to sideload a stale build and conclude a fix did not work.
@@ -35,8 +49,16 @@ jobs:
       env:
         HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       run: echo "tag=${GITHUB_RUN_NUMBER}-${HEAD_SHA:0:7}" >> "$GITHUB_OUTPUT"
-    - name: Upload APK
+    - name: Upload debug APK
       uses: actions/upload-artifact@v4
       with:
         name: pocket-tts-debug-apk-${{ steps.label.outputs.tag }}
         path: android/app/build/outputs/apk/debug/*.apk
+
+    # Worth sideloading too: the release build is the one that runs shrunk and
+    # optimised, and until now it had never been installed on anything.
+    - name: Upload release APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: pocket-tts-release-apk-${{ steps.label.outputs.tag }}
+        path: android/app/build/outputs/apk/release/*.apk
