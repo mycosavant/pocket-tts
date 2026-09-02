@@ -62,14 +62,7 @@ class AppearanceActivity : AppCompatActivity() {
         binding.copyButton.setOnClickListener { copyAsKotlin() }
         binding.resetButton.setOnClickListener {
             settings.resetGlass()
-            // The panel reports which branch it drew on every frame. Without this
-        // the capture can decline silently and the screen looks identical to
-        // one whose sliders are not wired up at all - which is exactly how the
-        // sibling-backdrop bug survived a release.
-        binding.previewPanel.onDrawModeChanged = { mode -> showDrawMode(mode) }
-        showDrawMode(binding.previewPanel.lastDraw)
-
-        applyToSliders()
+            applyToSliders()
             render()
         }
 
