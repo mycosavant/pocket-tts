@@ -10,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -94,6 +95,22 @@ class ActivityLaunchTest {
             slider.dispatchTouchEvent(event)
             event.recycle()
         }
+    }
+
+    /**
+     * Polls [check] on this thread until it holds.
+     *
+     * The reader runs on its own dispatchers, so what it does is not ordered
+     * against an activity reaching RESUMED. Sleeping is right here: nothing
+     * being waited for is delivered by the Robolectric main looper.
+     */
+    private fun waitFor(what: String, timeoutMillis: Long = 10_000, check: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            if (check()) return
+            Thread.sleep(5)
+        }
+        fail("never became true: $what")
     }
 
     private fun layOut(activity: android.app.Activity) {
@@ -215,14 +232,19 @@ class ActivityLaunchTest {
         }
 
         Robolectric.buildActivity(ReadAloudActivity::class.java, intent).setup().use { controller ->
+            // Waited for rather than read straight off: the reader hands a
+            // chunk to the engine from its own thread, some time after the
+            // activity has finished starting. Reading the count here used to
+            // work only because the fake engine returned instantly.
+            waitFor("the first chunk reached the engine") { engine.spoken.isNotEmpty() }
             val spokenBefore = engine.spoken.size
-            assertTrue("nothing was ever spoken", spokenBefore > 0)
 
             controller.recreate()
 
-            // Given a fair chance to speak again, and asserted that it did not:
-            // without the guard the second speak lands within milliseconds.
-            val grew = (0 until 40).any {
+            // Given a fair chance to speak again, and asserted that it did
+            // not. Ten times the fake engine's own latency, so "it did not
+            // happen" is not merely "it had not happened yet".
+            val grew = (0 until 100).any {
                 Thread.sleep(5)
                 engine.spoken.size > spokenBefore
             }
