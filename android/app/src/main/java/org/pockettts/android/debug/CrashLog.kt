@@ -2,6 +2,7 @@ package org.pockettts.android.debug
 
 import android.content.Context
 import android.os.Build
+import androidx.core.content.pm.PackageInfoCompat
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -86,9 +87,15 @@ object CrashLog {
     }
 
     fun deviceMetadata(context: Context): Map<String, String> {
+        // Through the compat helper: PackageInfo.longVersionCode arrived in
+        // API 28, and this app runs from 26. The call sat inside runCatching,
+        // so on Android 8 it did not crash - it threw NoSuchMethodError, was
+        // swallowed, and every crash report from those devices said "unknown"
+        // where the app version should be. A crash report that cannot say
+        // which build crashed is most of the way to useless.
         val version = runCatching {
             val info = context.packageManager.getPackageInfo(context.packageName, 0)
-            "${info.versionName} (${info.longVersionCode})"
+            "${info.versionName} (${PackageInfoCompat.getLongVersionCode(info)})"
         }.getOrDefault("unknown")
 
         return linkedMapOf(

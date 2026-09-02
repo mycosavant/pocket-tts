@@ -24,6 +24,24 @@ jobs:
     - name: Run unit tests
       working-directory: android
       run: ./gradlew --no-daemon :app:testDebugUnitTest
+    # The class of bug lint sees and nothing else here does: an API newer than
+    # minSdk. It compiles, every test passes - they run on a modern SDK - and it
+    # breaks only on the oldest phones this app claims to support, which are the
+    # ones least likely to be in the room. One was already shipping: the crash
+    # reporter read the app version with an API 28 call, swallowed the
+    # NoSuchMethodError on Android 8, and reported "unknown" for the one field a
+    # crash report most needs.
+    - name: Lint
+      working-directory: android
+      run: ./gradlew --no-daemon :app:lintDebug
+    - name: Upload the lint report when it fails
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: lint-report-${{ github.run_number }}
+        path: android/app/build/reports/lint-results-debug.html
+        if-no-files-found: ignore
+
     - name: Build debug APK
       working-directory: android
       run: ./gradlew --no-daemon :app:assembleDebug
