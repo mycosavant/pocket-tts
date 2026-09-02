@@ -75,6 +75,31 @@ all of it the ONNX Runtime and sherpa-onnx native libraries for `arm64-v8a` and
 `armeabi-v7a`. Dropping `armeabi-v7a` from `abiFilters` in `app/build.gradle.kts`
 roughly halves that if you only care about 64-bit devices.
 
+## One install, however many things ask for it
+
+Two callers reached the downloader independently - the button on the main
+screen, and any read that arrived before the model existed - and neither knew
+about the other. They shared a partial-download file and a staging directory, so
+tapping Download and then selecting text in another app had them writing the
+same `.part` and deleting each other's unpacked files.
+
+The download also belonged to the activity that started it. A configuration
+change cancelled the coroutine, but the transfer has no suspension point, so it
+carried on headless while the recreated screen said "not downloaded" and invited
+a second tap - and the partial was deleted on the way out, so that tap began
+again from zero.
+
+`engine/ModelInstall` owns one shared attempt. Everybody who asks joins the one
+in flight, a screen that goes away leaves it running, and progress is a
+`StateFlow` a recreated screen can pick up rather than something an activity
+holds. Removing the sharing fails the test for it.
+
+The download resumes. It is 98 MB; without a `Range` request a drop at 90 MB
+throws away 90 MB, and on a connection that drops regularly it never finishes at
+all - each attempt just gets a different distance through the same first
+stretch. The partial now survives a network failure and is deleted only when the
+archive turns out not to unpack, because that one is not worth resuming.
+
 ## Keeping the model, and the voices
 
 Everything lives in internal storage, so uninstalling threw all of it away: a

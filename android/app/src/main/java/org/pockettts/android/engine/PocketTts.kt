@@ -159,7 +159,11 @@ class PocketTts private constructor(
             progress: ModelManager.ProgressListener?,
         ): PocketTts = withContext(Dispatchers.IO) {
             val manager = ModelManager(context)
-            val files = manager.ensureModel(progress)
+            // Through the shared installer rather than straight to the manager,
+            // so a read that arrives while the download button's transfer is
+            // running joins it instead of starting a second one over the same
+            // files.
+            val files = ModelInstall.ensure(context)
             val settings = Settings(context)
 
             Log.i(TAG, "Loading Pocket TTS from ${files.lmMain.parentFile}")

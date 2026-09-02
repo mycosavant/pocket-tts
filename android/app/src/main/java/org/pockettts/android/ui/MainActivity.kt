@@ -10,7 +10,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,6 +23,7 @@ import org.pockettts.android.databinding.ActivityMainBinding
 import org.pockettts.android.debug.CrashLog
 import org.pockettts.android.debug.Metrics
 import org.pockettts.android.debug.ExitReasons
+import org.pockettts.android.engine.ModelInstall
 import org.pockettts.android.engine.ModelManager
 import org.pockettts.android.engine.Settings
 import org.pockettts.android.engine.VoiceCatalog
@@ -45,6 +48,7 @@ class MainActivity : AppCompatActivity() {
 
         binding.downloadButton.setOnClickListener { startDownload() }
         binding.timingsButton.setOnClickListener { showTimings() }
+        observeInstall()
         binding.installButton.setOnClickListener {
             // Any type: the bundle arrives as a .tar.bz2 that most file
             // providers report as application/octet-stream, or as nothing at
@@ -174,7 +178,7 @@ class MainActivity : AppCompatActivity() {
 
         val installed = ModelManager(this).isModelInstalled
         binding.modelStatus.setText(if (installed) R.string.model_ready else R.string.model_missing)
-        val busy = download?.isActive == true
+        val busy = ModelInstall.isRunning
         binding.downloadButton.isEnabled = !installed && !busy
         binding.installButton.isEnabled = !installed && !busy
     }
@@ -215,7 +219,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Installs the model from a bundle the user already has on the device. */
     private fun installModel(uri: Uri) {
-        if (download?.isActive == true) return
+        if (ModelInstall.isRunning) return
         binding.downloadButton.isEnabled = false
         binding.installButton.isEnabled = false
         binding.downloadProgress.isIndeterminate = true
@@ -235,35 +239,54 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Joins the shared install, rather than owning one.
+     *
+     * The download used to belong to this activity's lifecycleScope, so a
+     * configuration change cancelled it - except the transfer has no suspension
+     * point and carried on headless, while the recreated screen said "not
+     * downloaded" and invited a second tap. Progress is observed instead, so
+     * rotating mid-download shows the same download still going.
+     */
     private fun startDownload() {
-        if (download?.isActive == true) return
-        binding.downloadButton.isEnabled = false
-        binding.downloadProgress.visibility = android.view.View.VISIBLE
+        if (ModelInstall.isRunning) return
+        lifecycleScope.launch { runCatching { ModelInstall.ensure(this@MainActivity) } }
+    }
 
-        download = lifecycleScope.launch {
-            val result = runCatching {
-                withContext(Dispatchers.IO) {
-                    ModelManager(this@MainActivity).ensureModel { fraction ->
-                        lifecycleScope.launch {
-                            if (fraction < 0) {
-                                binding.downloadProgress.isIndeterminate = true
-                                binding.modelStatus.setText(R.string.downloading_unknown)
-                            } else {
-                                binding.downloadProgress.isIndeterminate = false
-                                binding.downloadProgress.progress = (fraction * 100).toInt()
-                                binding.modelStatus.text =
-                                    getString(R.string.downloading, (fraction * 100).toInt())
-                            }
-                        }
-                    }
+    private fun observeInstall() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                ModelInstall.state.collect { state -> renderInstall(state) }
+            }
+        }
+    }
+
+    private fun renderInstall(state: ModelInstall.State) {
+        val working = state is ModelInstall.State.Working
+        binding.downloadProgress.visibility =
+            if (working) android.view.View.VISIBLE else android.view.View.GONE
+        binding.downloadButton.isEnabled = !working && !ModelManager(this).isModelInstalled
+        binding.installButton.isEnabled = binding.downloadButton.isEnabled
+
+        when (state) {
+            is ModelInstall.State.Working -> {
+                if (state.fraction < 0) {
+                    binding.downloadProgress.isIndeterminate = true
+                    binding.modelStatus.setText(R.string.downloading_unknown)
+                } else {
+                    binding.downloadProgress.isIndeterminate = false
+                    binding.downloadProgress.progress = (state.fraction * 100).toInt()
+                    binding.modelStatus.text =
+                        getString(R.string.downloading, (state.fraction * 100).toInt())
                 }
             }
-            binding.downloadProgress.visibility = android.view.View.GONE
-            result.onFailure {
-                binding.modelStatus.text =
-                    getString(R.string.error_generic, it.message ?: it.javaClass.simpleName)
-            }
-            refresh()
+
+            is ModelInstall.State.Failed ->
+                binding.modelStatus.text = getString(R.string.error_generic, state.message)
+
+            ModelInstall.State.Installed -> binding.modelStatus.setText(R.string.model_ready)
+
+            ModelInstall.State.Idle -> refresh()
         }
     }
 

@@ -297,7 +297,10 @@ class ReaderTest {
     fun `blank text finishes instead of leaving the reader hanging`() = runBlocking {
         val id = Reader.speak(context, "   ", treatAsMarkdown = false, source = Reader.Source.Scratchpad)
         awaitFor(id, "finished") { it is Reader.State.Finished }
-        assertFalse(Reader.isActive)
+        // Waited for rather than asserted outright: the state is published from
+        // inside the job, so there is a moment after Finished where the
+        // coroutine has not yet completed.
+        awaitUntil("the reader went idle") { !Reader.isActive }
     }
 
     /** Polls [check], for the things that are true of the world rather than of one state. */

@@ -100,8 +100,12 @@ class ModelManager(private val context: Context) {
             val staging = File(root, "$MODEL_NAME.staging")
             staging.deleteRecursively()
 
+            // The partial download survives a network failure on purpose: at
+            // 98 MB over a connection that drops, deleting it means starting
+            // from zero every time, which on a bad line never finishes at all.
+            download(URL(MODEL_URL), archive, progress)
+
             try {
-                download(URL(MODEL_URL), archive, progress)
                 extractTarBz2(archive, staging)
                 // Rename last, so an interrupted download never leaves a
                 // half-unpacked directory that looks installed.
@@ -109,8 +113,14 @@ class ModelManager(private val context: Context) {
                 if (!staging.renameTo(modelDir)) {
                     throw IOException("Could not move unpacked model into place")
                 }
-            } finally {
                 archive.delete()
+            } catch (error: Throwable) {
+                // An archive that will not unpack is not worth resuming - it is
+                // truncated, or it is not what we think it is. A slow retry
+                // beats a fast failure repeated forever.
+                archive.delete()
+                throw error
+            } finally {
                 staging.deleteRecursively()
             }
 
@@ -247,15 +257,25 @@ class ModelManager(private val context: Context) {
         }
     }
 
+    /**
+     * Fetches [url] into [target], continuing an earlier attempt if there is one.
+     *
+     * The bundle is 98 MB. Without a `Range` request a drop at 90 MB throws
+     * away 90 MB, and on a connection that drops regularly the download never
+     * completes at all - each attempt simply gets a different distance through
+     * the same first stretch.
+     */
     private fun download(url: URL, target: File, progress: ProgressListener?) {
         var current = url
         var redirects = 0
         while (true) {
+            val have = if (target.isFile) target.length() else 0L
             val connection = (current.openConnection() as HttpURLConnection).apply {
                 connectTimeout = 30_000
                 readTimeout = 60_000
                 instanceFollowRedirects = false
                 setRequestProperty("User-Agent", "pocket-tts-android")
+                if (have > 0) setRequestProperty("Range", "bytes=$have-")
             }
             try {
                 val code = connection.responseCode
@@ -268,16 +288,23 @@ class ModelManager(private val context: Context) {
                     current = URL(current, location)
                     continue
                 }
-                if (code != HttpURLConnection.HTTP_OK) {
+                // 206 means the server honoured the range and is sending the
+                // rest. 200 means it ignored it and is sending the whole file,
+                // so whatever was already there has to go.
+                val resuming = code == HttpURLConnection.HTTP_PARTIAL && have > 0
+                if (code != HttpURLConnection.HTTP_OK && !resuming) {
                     throw IOException("HTTP $code fetching $current")
                 }
 
-                val total = connection.contentLengthLong
+                val alreadyHave = if (resuming) have else 0L
+                val total = connection.contentLengthLong.let {
+                    if (it > 0) it + alreadyHave else it
+                }
                 target.parentFile?.mkdirs()
                 connection.inputStream.use { input ->
-                    target.outputStream().use { output ->
+                    java.io.FileOutputStream(target, resuming).use { output ->
                         val buffer = ByteArray(1 shl 16)
-                        var written = 0L
+                        var written = alreadyHave
                         var lastReported = -1
                         while (true) {
                             val read = input.read(buffer)
