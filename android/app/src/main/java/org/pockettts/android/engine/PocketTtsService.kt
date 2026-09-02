@@ -171,6 +171,7 @@ class PocketTtsService : TextToSpeechService() {
                 // is the user's normal speed.
                 val speed = (request.speechRate / 100f)
                     .coerceIn(Settings.MIN_SPEED, Settings.MAX_SPEED)
+                val steps = settings.decodeSteps
 
                 callback.start(engine.sampleRate, AudioFormat.ENCODING_PCM_16BIT, 1)
                 val maxBytes = callback.maxBufferSize
@@ -182,7 +183,7 @@ class PocketTtsService : TextToSpeechService() {
                     // and it costs one call - the offsets are only meaningful
                     // because the text above is passed through unrewritten.
                     callback.rangeStart(chunk.start, chunk.end, 0)
-                    val completed = engine.synthesize(chunk.text, voice, speed) { samples ->
+                    val completed = engine.synthesize(chunk.text, voice, speed, steps) { samples ->
                         val giveUp = stopRequested.get() || EngineTurn.superseded(turn)
                         if (giveUp) false else deliver(callback, samples, maxBytes)
                     }

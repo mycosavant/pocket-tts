@@ -69,6 +69,9 @@ class PocketTts private constructor(
     /**
      * Synthesises [text] and hands audio to [onAudio] as it is produced.
      *
+     * @param numSteps Euler steps per frame when decoding the flow. See
+     *   [Settings.decodeSteps]: sherpa-onnx defaults to 5, the reference
+     *   implementation to 1.
      * @param onAudio receives float samples in [-1, 1]; return false to abandon
      *   the rest of this utterance.
      * @return false if generation was stopped early.
@@ -77,6 +80,7 @@ class PocketTts private constructor(
         text: String,
         voice: LoadedVoice,
         speed: Float,
+        numSteps: Int,
         onAudio: (FloatArray) -> Boolean,
     ): Boolean = synthesisLock.withLock {
         withContext(Dispatchers.Default) {
@@ -85,6 +89,7 @@ class PocketTts private constructor(
                 speed = speed,
                 referenceAudio = voice.samples,
                 referenceSampleRate = voice.sampleRate,
+                numSteps = numSteps,
             )
             tts.generateWithConfigAndCallback(
                 text,

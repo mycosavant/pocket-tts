@@ -3,6 +3,7 @@ package org.pockettts.android.player
 import android.content.Context
 import org.pockettts.android.engine.ModelManager
 import org.pockettts.android.engine.PocketTts
+import org.pockettts.android.engine.Settings
 import org.pockettts.android.engine.VoiceCatalog
 
 /** [SpeechEngine] backed by the real model. */
@@ -10,6 +11,8 @@ class PocketTtsEngine(
     private val context: Context,
     private val tts: PocketTts,
 ) : SpeechEngine {
+
+    private val settings = Settings(context)
 
     private var voice: PocketTts.LoadedVoice? = null
 
@@ -38,7 +41,9 @@ class PocketTtsEngine(
         val loaded = continuation
             ?: voice
             ?: resolve(VoiceCatalog.DEFAULT_VOICE_ID).also { voice = it }
-        return tts.synthesize(text, loaded, speed, onAudio)
+        // Read per call rather than held, so moving the slider changes the
+        // next sentence rather than the next read.
+        return tts.synthesize(text, loaded, speed, settings.decodeSteps, onAudio)
     }
 
     private suspend fun resolve(voiceId: String): PocketTts.LoadedVoice {

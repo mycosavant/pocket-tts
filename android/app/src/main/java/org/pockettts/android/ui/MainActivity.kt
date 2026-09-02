@@ -48,6 +48,12 @@ class MainActivity : AppCompatActivity() {
 
         binding.downloadButton.setOnClickListener { startDownload() }
         binding.timingsButton.setOnClickListener { showTimings() }
+        binding.stepsSlider.addOnChangeListener { _, value, fromUser ->
+            if (fromUser) {
+                settings.decodeSteps = value.toInt()
+                binding.stepsLabel.text = getString(R.string.decode_steps, settings.decodeSteps)
+            }
+        }
         observeInstall()
         binding.installButton.setOnClickListener {
             // Any type: the bundle arrives as a .tar.bz2 that most file
@@ -176,6 +182,9 @@ class MainActivity : AppCompatActivity() {
             binding.speedSlider.stepSize,
         )
         binding.speedLabel.text = getString(R.string.speed, settings.speed)
+        binding.stepsSlider.value = settings.decodeSteps.toFloat()
+            .coerceIn(binding.stepsSlider.valueFrom, binding.stepsSlider.valueTo)
+        binding.stepsLabel.text = getString(R.string.decode_steps, settings.decodeSteps)
         binding.markdownSwitch.isChecked = settings.treatSelectionAsMarkdown
         binding.codeBlocksSwitch.isChecked = settings.speakCodeBlocks
         binding.steadyVoiceSwitch.isChecked = settings.steadyVoice

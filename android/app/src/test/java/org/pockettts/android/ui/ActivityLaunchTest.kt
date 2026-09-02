@@ -13,7 +13,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import android.view.MotionEvent
+import android.widget.TextView
+import com.google.android.material.slider.Slider
 import org.pockettts.android.R
+import org.pockettts.android.engine.Settings
 import org.pockettts.android.player.FakeEngine
 import org.pockettts.android.player.FakeSink
 import org.pockettts.android.player.Reader
@@ -81,6 +85,17 @@ class ActivityLaunchTest {
      * (this is where an off-grid `Slider` value throws), and custom views do
      * their real work in draw. Stopping at `setup()` let both through.
      */
+    /** Presses the slider at [toFraction] of its width, as a finger would. */
+    private fun drag(slider: Slider, toFraction: Float) {
+        val x = slider.width * toFraction
+        val y = slider.height / 2f
+        listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP).forEach { action ->
+            val event = MotionEvent.obtain(0L, 0L, action, x, y, 0)
+            slider.dispatchTouchEvent(event)
+            event.recycle()
+        }
+    }
+
     private fun layOut(activity: android.app.Activity) {
         val root = activity.findViewById<android.view.View>(android.R.id.content)
         root.measure(
@@ -112,6 +127,35 @@ class ActivityLaunchTest {
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             layOut(controller.get())
             assertNotNull(controller.get().findViewById<Toolbar>(R.id.toolbar))
+        }
+    }
+
+    @Test
+    fun `the engine sliders show what is stored and store what is dragged`() {
+        // The appearance sliders looked wired up for a whole release while
+        // doing nothing, so a slider that is only laid out is not evidence of
+        // anything. This reads the stored value back off the control and then
+        // drives the control and reads the store.
+        val settings = Settings(ApplicationProvider.getApplicationContext())
+        settings.decodeSteps = 2
+
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            layOut(activity)
+            val slider = activity.findViewById<Slider>(R.id.stepsSlider)
+            val label = activity.findViewById<TextView>(R.id.stepsLabel)
+
+            assertEquals("the slider ignored the stored value", 2f, slider.value, 0f)
+            assertTrue("the label did not say the value: ${label.text}", "2" in label.text)
+
+            // Through a touch rather than by calling the listener, because the
+            // listener only acts on user changes - which is what stops
+            // rendering the screen from rewriting the settings, and is also
+            // exactly the branch a direct call would skip.
+            drag(slider, toFraction = 1f)
+
+            assertEquals("dragging the slider did not reach the settings", 8, settings.decodeSteps)
+            assertTrue("the label did not follow: ${label.text}", "8" in label.text)
         }
     }
 

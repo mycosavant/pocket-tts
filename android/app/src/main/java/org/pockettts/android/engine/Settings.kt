@@ -27,6 +27,23 @@ class Settings(context: Context) {
         get() = prefs.getInt(KEY_THREADS, DEFAULT_THREADS).coerceIn(1, 8)
         set(value) = prefs.edit { putInt(KEY_THREADS, value.coerceIn(1, 8)) }
 
+    /**
+     * Flow-decoding steps per audio frame.
+     *
+     * Each generated frame is produced by integrating a flow, and this is how
+     * many Euler steps that integration takes. sherpa-onnx defaults to 5. The
+     * reference implementation defaults to 1 - both in `lsd_decode` itself and
+     * in `default_parameters.py` - so four fifths of that work may be buying
+     * nothing at all, on a phone, per frame.
+     *
+     * Which it is cannot be decided from here: it is a quality-against-speed
+     * trade, one side of which is only audible. So it is a slider, and the
+     * default stays at what has been shipping until a device says otherwise.
+     */
+    var decodeSteps: Int
+        get() = prefs.getInt(KEY_DECODE_STEPS, DEFAULT_DECODE_STEPS).coerceIn(MIN_STEPS, MAX_STEPS)
+        set(value) = prefs.edit { putInt(KEY_DECODE_STEPS, value.coerceIn(MIN_STEPS, MAX_STEPS)) }
+
     /** Whether fenced code blocks in Markdown are read out. */
     var speakCodeBlocks: Boolean
         get() = prefs.getBoolean(KEY_CODE_BLOCKS, false)
@@ -95,6 +112,12 @@ class Settings(context: Context) {
         const val MAX_SPEED = 2.0f
         private const val DEFAULT_THREADS = 2
 
+        const val MIN_STEPS = 1
+        const val MAX_STEPS = 8
+
+        /** sherpa-onnx's own default, so nothing changes until it is changed. */
+        const val DEFAULT_DECODE_STEPS = 5
+
         const val MAX_BLUR_DP = 80f
         const val MAX_CORNER_DP = 48f
 
@@ -119,6 +142,7 @@ class Settings(context: Context) {
         private const val KEY_VOICE = "voice"
         private const val KEY_SPEED = "speed"
         private const val KEY_THREADS = "threads"
+        private const val KEY_DECODE_STEPS = "decode_steps"
         private const val KEY_CODE_BLOCKS = "speak_code_blocks"
         private const val KEY_SELECTION_MARKDOWN = "selection_markdown"
         private const val KEY_STEADY_VOICE = "steady_voice"

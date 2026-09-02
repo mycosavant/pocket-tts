@@ -305,6 +305,48 @@ An unmeasured value reports "not measured yet" rather than a confident zero, and
 `MetricsTest` enforces that. "0 underruns" from a session that never played
 anything reads as evidence and is not.
 
+## The voice, and why it kept changing
+
+The voice used to change between sentences. That is not the arbitration and it
+is not a bug in this app: it is how the model is being asked for audio.
+
+Pocket TTS is prompted with a few seconds of reference audio and samples a
+speaker in its neighbourhood, so the same prompt asked twice gives two slightly
+different people. A read is one call per sentence. Every sentence therefore
+draws a new speaker from the same sample, and what you hear is the drawing.
+
+Upstream names the fix, as a TODO in `tts_model.py` immediately above the loop
+that splits long text into chunks: use the audio of one chunk as conditioning
+for the next. `player/AudioTail` keeps the last six seconds actually produced
+and the reader hands them back as the prompt for the next sentence, so each one
+continues the voice already speaking. The buffer lives on the utterance rather
+than the play loop, so a skip moves through the text without restarting the
+speaker.
+
+It is a setting, defaulting on, because the trade is real and cannot be judged
+from source: conditioning on generated audio can also let the voice wander over
+a long read, and which is worse is a question for an ear.
+
+One cost is unmeasured. `OfflineTtsPocketModelConfig.voiceEmbeddingCacheCapacity`
+defaults to 50, so sherpa-onnx caches encoded voice prompts; a fixed prompt is
+encoded once and a rolling one plausibly is not. Six seconds is less audio than
+the ten a stock voice prompt is trimmed to, so the ceiling on that cost is one
+encode of a shorter prompt per sentence - but "plausibly" is doing work in that
+sentence, and time-to-first-audio on a device is what settles it.
+
+## Steps per frame, and a factor of five
+
+`GenerationConfig.numSteps` is how many Euler steps the flow integration takes
+for each generated frame. sherpa-onnx defaults it to 5. The reference
+implementation defaults to 1 - in `lsd_decode` itself and again in
+`default_parameters.py`. Four fifths of that work may be buying nothing, per
+frame, on a phone.
+
+Which it is cannot be settled from here, because one side of the trade is only
+audible. So it is a slider on the main screen, next to Timings, and the default
+stays at 5: at what has been shipping, not at a new guess. Move it, read
+something long, and look at the generation speed.
+
 ## When it crashes
 
 Sideloading onto a phone means no logcat within reach, and an app that dies

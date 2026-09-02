@@ -55,6 +55,8 @@
     <string name="composing">Composing the first sentence…</string>
 
     <string name="install_model">Install from a file</string>
+    <string name="decode_steps">Decode steps: %1$d</string>
+    <string name="decode_steps_explained">Passes per audio frame. Kyutai\'s own code uses 1; this engine defaults to 5. Fewer should be faster - listen for whether it is also worse.</string>
     <string name="timings">Timings</string>
     <string name="timings_share">Share</string>
     <string name="installing_model">Unpacking the model…</string>
