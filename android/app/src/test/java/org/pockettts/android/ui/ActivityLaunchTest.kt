@@ -157,6 +157,36 @@ class ActivityLaunchTest {
     }
 
     @Test
+    fun `rotating mid-sentence does not start the paragraph again`() {
+        // A configuration change recreates the activity with the same intent.
+        // Handling it a second time stopped the read and began it from the
+        // first word, so turning the phone restarted the paragraph.
+        val intent = Intent(
+            ApplicationProvider.getApplicationContext(),
+            ReadAloudActivity::class.java,
+        ).apply {
+            action = Intent.ACTION_PROCESS_TEXT
+            type = "text/plain"
+            putExtra(Intent.EXTRA_PROCESS_TEXT, "One sentence. Two sentences. Three.")
+        }
+
+        Robolectric.buildActivity(ReadAloudActivity::class.java, intent).setup().use { controller ->
+            val spokenBefore = engine.spoken.size
+            assertTrue("nothing was ever spoken", spokenBefore > 0)
+
+            controller.recreate()
+
+            // Given a fair chance to speak again, and asserted that it did not:
+            // without the guard the second speak lands within milliseconds.
+            val grew = (0 until 40).any {
+                Thread.sleep(5)
+                engine.spoken.size > spokenBefore
+            }
+            assertFalse("the read started again after rotation", grew)
+        }
+    }
+
+    @Test
     fun `text selected inside the app is handed to the scratchpad, not a second window`() {
         // The PROCESS_TEXT item this app registers appears in the selection
         // toolbar of its own editor, so selecting text in the scratchpad used

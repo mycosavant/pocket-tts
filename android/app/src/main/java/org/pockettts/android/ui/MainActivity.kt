@@ -158,7 +158,16 @@ class MainActivity : AppCompatActivity() {
     private fun refresh() {
         val voice = VoiceCatalog.byId(settings.voiceId)
         binding.voiceLabel.text = voice?.displayName ?: settings.voiceId
-        binding.speedSlider.value = settings.speed
+        // Through the step grid: Material's Slider throws during layout on a
+        // value that misses it, which is how the appearance screen crashed on
+        // open once already. A stored speed from another build is exactly the
+        // sort of value that would miss.
+        binding.speedSlider.value = GlassValues.snapToStep(
+            settings.speed,
+            binding.speedSlider.valueFrom,
+            binding.speedSlider.valueTo,
+            binding.speedSlider.stepSize,
+        )
         binding.speedLabel.text = getString(R.string.speed, settings.speed)
         binding.markdownSwitch.isChecked = settings.treatSelectionAsMarkdown
         binding.codeBlocksSwitch.isChecked = settings.speakCodeBlocks

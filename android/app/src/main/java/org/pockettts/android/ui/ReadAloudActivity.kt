@@ -1,10 +1,15 @@
 package org.pockettts.android.ui
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -25,6 +30,10 @@ import org.pockettts.android.player.Reader
  */
 class ReadAloudActivity : AppCompatActivity() {
 
+    private companion object {
+        const val STATE_UTTERANCE = "utterance"
+    }
+
     private lateinit var binding: ActivityReadAloudBinding
 
     /**
@@ -35,6 +44,9 @@ class ReadAloudActivity : AppCompatActivity() {
      * meant closing itself before its own read had begun.
      */
     private var utterance: Long = 0
+
+    private val askForNotifications =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,7 +75,24 @@ class ReadAloudActivity : AppCompatActivity() {
         }
 
         observeReader()
-        handleIntent(intent)
+
+        // Only on a genuine start. A configuration change recreates the
+        // activity with the same intent, and handling it again stopped the read
+        // and began it from the first word - rotating the phone mid-sentence
+        // started the paragraph over.
+        if (savedInstanceState == null) {
+            handleIntent(intent)
+        } else {
+            utterance = savedInstanceState.getLong(STATE_UTTERANCE)
+            binding.preview.text = extractText(intent)
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        // Carried across so the recreated window still recognises its own read
+        // among the states of a reader the whole process shares.
+        outState.putLong(STATE_UTTERANCE, utterance)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -101,6 +130,7 @@ class ReadAloudActivity : AppCompatActivity() {
             finish()
             return
         }
+        ensureNotificationsAllowed()
         PlaybackService.start(this)
     }
 
@@ -112,6 +142,23 @@ class ReadAloudActivity : AppCompatActivity() {
 
             Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
             else -> ""
+        }
+    }
+
+    /**
+     * Asked for once the sheet is really being shown.
+     *
+     * Someone whose first contact with this app is selecting text in another
+     * one gets a foreground service and, on Android 13+, no notification to
+     * control it with. Asked here rather than at the start, so the prompt has
+     * some context around it, and never on the path that hands the read
+     * straight to the scratchpad.
+     */
+    private fun ensureNotificationsAllowed() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+        if (granted != PackageManager.PERMISSION_GRANTED) {
+            askForNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
