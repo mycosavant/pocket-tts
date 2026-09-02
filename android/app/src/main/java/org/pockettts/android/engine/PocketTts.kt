@@ -13,6 +13,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.pockettts.android.debug.Metrics
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Owns the one loaded copy of the model.
@@ -41,7 +42,9 @@ class PocketTts private constructor(
         override fun hashCode(): Int = id.hashCode()
     }
 
-    private val voiceCache = mutableMapOf<String, LoadedVoice>()
+    // Written from Dispatchers.IO by both the reader and the system engine, so
+    // not a plain map.
+    private val voiceCache = ConcurrentHashMap<String, LoadedVoice>()
 
     suspend fun loadVoice(voice: VoiceCatalog.Voice): LoadedVoice = withContext(Dispatchers.IO) {
         voiceCache[voice.id]?.let { return@withContext it }

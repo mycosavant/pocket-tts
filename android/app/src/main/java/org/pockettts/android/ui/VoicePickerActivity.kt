@@ -2,6 +2,7 @@ package org.pockettts.android.ui
 
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -123,13 +124,10 @@ class VoicePickerActivity : AppCompatActivity() {
         val result = runCatching {
             val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 ?: error("Could not open that file")
-            val name = (uri.lastPathSegment ?: "voice")
-                .substringAfterLast('/')
-                .substringBeforeLast('.')
-                .replace(Regex("""[^A-Za-z0-9_-]"""), "_")
-                .ifBlank { "voice" }
-            ModelManager(this).importVoice(name, bytes)
-            name
+            // The manager decides the final id, because it is the thing that
+            // knows what is already taken - a name that collides is suffixed
+            // rather than allowed to overwrite a voice that cannot be re-fetched.
+            ModelManager(this).importVoice(displayNameOf(uri), bytes).nameWithoutExtension
         }
 
         result.onSuccess { name ->
@@ -143,6 +141,27 @@ class VoicePickerActivity : AppCompatActivity() {
                 Toast.LENGTH_LONG,
             ).show()
         }
+    }
+
+    /**
+     * A name a person would recognise.
+     *
+     * The last path segment of a document URI is usually a numeric id, so a
+     * file picked from Downloads arrived in the list called something like
+     * "1234". The provider knows its real name; ask for it.
+     */
+    private fun displayNameOf(uri: Uri): String {
+        val fromProvider = runCatching {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+        }.getOrNull()
+
+        return (fromProvider ?: uri.lastPathSegment ?: "voice")
+            .substringAfterLast('/')
+            .substringBeforeLast('.')
+            .replace(Regex("""[^A-Za-z0-9_-]"""), "_")
+            .trim('_')
+            .ifBlank { "voice" }
     }
 
     private class VoiceAdapter(

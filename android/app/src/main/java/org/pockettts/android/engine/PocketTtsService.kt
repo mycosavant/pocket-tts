@@ -174,10 +174,12 @@ class PocketTtsService : TextToSpeechService() {
         val manager = ModelManager(this)
         VoiceCatalog.byId(name)?.let { stock ->
             // Stock voices are downloadable, so they count as valid whether or
-            // not the wav happens to be cached yet.
-            return manager.cachedVoice(stock) ?: File(filesDir, "pocket-tts/voices/$name.wav")
+            // not the wav happens to be cached yet. Asked of the manager rather
+            // than rebuilt from a path literal here, which is how the two got
+            // to disagree in the first place.
+            return manager.cachedVoice(stock) ?: manager.voiceFile(name)
         }
-        return manager.importedVoices().firstOrNull { it.nameWithoutExtension == name }
+        return manager.voiceFile(name).takeIf { it.isFile }
     }
 
     /**

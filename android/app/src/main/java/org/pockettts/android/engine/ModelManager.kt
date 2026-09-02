@@ -33,6 +33,17 @@ class ModelManager(private val context: Context) {
     val modelDir: File get() = File(root, MODEL_NAME)
     private val voiceDir: File get() = File(root, "voices")
 
+    /**
+     * Imported voices, kept apart from the downloaded ones.
+     *
+     * They shared a directory, and a wav named after a stock voice therefore
+     * landed on exactly the path that voice's prompt is cached at - silently
+     * replacing it. The import then vanished from the list, because
+     * [importedVoices] filters out anything named like a stock voice. One
+     * action, two losses, no message.
+     */
+    private val importedDir: File get() = File(voiceDir, "imported")
+
     val isModelInstalled: Boolean get() = resolveModelOrNull() != null
 
     /**
@@ -165,29 +176,75 @@ class ModelManager(private val context: Context) {
         target
     }
 
-    /** Copies a user-supplied wav into the voice cache under [id]. */
-    fun importVoice(id: String, bytes: ByteArray): File {
-        voiceDir.mkdirs()
+    /**
+     * Copies a user-supplied wav in under [name], or the nearest free variant.
+     *
+     * A name that collides with a stock voice, or with an earlier import, is
+     * suffixed rather than allowed to overwrite: a recorded voice cannot be
+     * fetched again, so losing one to a name clash is not a recoverable
+     * mistake.
+     *
+     * @return the stored file, whose name without its extension is the voice id.
+     */
+    fun importVoice(name: String, bytes: ByteArray): File {
+        importedDir.mkdirs()
         // Validate before storing: a file that turns out not to be readable PCM
         // should fail at import, not halfway through the first sentence.
         WavReader.read(bytes)
-        val target = File(voiceDir, "$id.wav")
+        val target = File(importedDir, "${freeVoiceId(name)}.wav")
         target.writeBytes(bytes)
         return target
+    }
+
+    private fun freeVoiceId(name: String): String {
+        fun taken(id: String) =
+            VoiceCatalog.byId(id) != null || File(importedDir, "$id.wav").exists()
+
+        if (!taken(name)) return name
+        var n = 2
+        while (taken("$name-$n")) n++
+        return "$name-$n"
     }
 
     fun cachedVoice(voice: VoiceCatalog.Voice): File? =
         File(voiceDir, voice.fileName).takeIf { it.isFile && it.length() > 0 }
 
     /** Where the wav for [id] lives, whether it is a stock voice or an imported one. */
-    fun voiceFile(id: String): File = File(voiceDir, "$id.wav")
+    fun voiceFile(id: String): File {
+        migrateImportedVoices()
+        val imported = File(importedDir, "$id.wav")
+        return if (imported.isFile) imported else File(voiceDir, "$id.wav")
+    }
 
     fun importedVoices(): List<File> {
-        val stock = VoiceCatalog.voices.map { it.fileName }.toSet()
-        return voiceDir.listFiles()
-            ?.filter { it.isFile && it.extension == "wav" && it.name !in stock }
+        migrateImportedVoices()
+        return importedDir.listFiles()
+            ?.filter { it.isFile && it.extension == "wav" }
             ?.sortedBy { it.name }
             ?: emptyList()
+    }
+
+    /**
+     * Moves voices imported by an older build into their own directory.
+     *
+     * Anything in the voice directory that is not named after a stock voice was
+     * an import, and is the user's own. One that *was* named after a stock
+     * voice already overwrote that prompt and cannot be told apart from it any
+     * more; that one is left where it is and will be replaced by a fresh
+     * download.
+     */
+    private fun migrateImportedVoices() {
+        val stock = VoiceCatalog.voices.map { it.fileName }.toSet()
+        val strays = voiceDir.listFiles()
+            ?.filter { it.isFile && it.extension == "wav" && it.name !in stock }
+            ?: return
+        if (strays.isEmpty()) return
+
+        importedDir.mkdirs()
+        strays.forEach { file ->
+            val target = File(importedDir, file.name)
+            if (!target.exists()) file.renameTo(target)
+        }
     }
 
     private fun download(url: URL, target: File, progress: ProgressListener?) {

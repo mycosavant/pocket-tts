@@ -228,6 +228,24 @@ The layout pass is the part that earns its keep. Views validate themselves while
 sizing, so reaching RESUMED proves very little: the slider bug passed a version
 of these tests that stopped at `setup()`, because nothing had been laid out yet.
 
+## The one thing here that cannot be fetched again
+
+A model re-downloads and a setting is retyped in seconds. A voice somebody
+recorded exists in one directory and nowhere else, so the failure worth
+guarding against is not a crash but a quiet overwrite.
+
+Imports used to share a directory with the downloaded prompts, so a wav named
+`alba.wav` landed on exactly the path the stock Alba prompt is cached at,
+replaced it, and then vanished from the list - because anything named like a
+stock voice was filtered out of that list. One action, two losses, no message.
+
+Imports now live in their own directory under `voices/imported`, and a name that
+collides with a stock voice or an earlier import is suffixed rather than allowed
+to win. Voices imported by an older build are carried across on first access;
+one that was already named after a stock voice is indistinguishable from the
+prompt it replaced and is left to be re-downloaded. `VoiceStorageTest` covers
+all of it, and restoring the shared directory fails four of its six cases.
+
 ## Measuring before optimising
 
 Inference is CPU-only and near real time, and every performance question about
