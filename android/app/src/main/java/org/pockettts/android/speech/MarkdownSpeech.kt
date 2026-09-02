@@ -42,29 +42,102 @@ object MarkdownSpeech {
         Regex("""^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?\s*$""")
     private val LINK_REFERENCE_DEF = Regex("""^ {0,3}\[[^]]+]:\s*\S+.*$""")
 
+    /** A line break of any flavour; matched rather than normalised, to keep offsets true. */
+    private val BREAK = Regex("""\r\n|\r|\n""")
+
     /** Private-use codepoint; stands in for a backslash-escaped character. */
     private const val SENTINEL = '\uE000'
+
+    /**
+     * Speakable text, and where each piece of it came from.
+     *
+     * Following along in the editor needs the second half. A chunk's offsets
+     * are into the *stripped* text, and stripping deletes syntax, so those
+     * offsets say nothing about the document the user is looking at. The map is
+     * kept per block rather than per character: a block comes from a known run
+     * of source lines, which is cheap to track and is the granularity a reader
+     * cares about anyway.
+     */
+    data class Speakable(val text: String, val spans: List<Span>) {
+
+        /**
+         * Where [start] until [end] of [text] came from in the source, or null
+         * if it cannot be placed.
+         *
+         * Narrowed to the exact sentence when that sentence survived stripping
+         * unchanged, which is the common case for ordinary prose. A line that
+         * was rewritten - emphasis removed, a link collapsed to its text -
+         * falls back to the block it belongs to, which is still a useful thing
+         * to highlight and is never a *wrong* thing to highlight.
+         */
+        fun sourceRange(start: Int, end: Int, source: String): IntRange? {
+            val touched = spans.filter { it.speakableStart < end && it.speakableEnd > start }
+            if (touched.isEmpty()) return null
+            val from = touched.minOf { it.sourceStart }
+            val to = touched.maxOf { it.sourceEnd }
+            if (from >= to || to > source.length) return null
+
+            val spoken = text.substring(start.coerceIn(0, text.length), end.coerceIn(0, text.length))
+                .trim()
+            if (spoken.isNotEmpty()) {
+                val exact = source.indexOf(spoken, startIndex = from)
+                if (exact in from until to) return exact until (exact + spoken.length)
+            }
+            return from until to
+        }
+    }
+
+    /** One block of speakable text, and the source it was made from. */
+    data class Span(
+        val speakableStart: Int,
+        val speakableEnd: Int,
+        val sourceStart: Int,
+        val sourceEnd: Int,
+    )
 
     /**
      * @return speakable plain text, paragraphs separated by a blank line so a
      *   downstream chunker can turn them into pauses.
      */
-    fun toSpeakable(markdown: String, options: Options = Options()): String {
-        if (markdown.isBlank()) return ""
+    fun toSpeakable(markdown: String, options: Options = Options()): String =
+        toSpeakableWithSource(markdown, options).text
 
-        val withoutComments = HTML_COMMENT.replace(markdown, " ")
-        val lines = withoutComments.replace("\r\n", "\n").replace('\r', '\n').split("\n")
+    /** As [toSpeakable], but also reporting where each block came from. */
+    fun toSpeakableWithSource(markdown: String, options: Options = Options()): Speakable {
+        if (markdown.isBlank()) return Speakable("", emptyList())
 
-        val blocks = mutableListOf<String>()
+        // Comments are blanked rather than removed, and lines are located by
+        // scanning rather than by rewriting the string, because every offset
+        // recorded below has to point into the document the user can see. A
+        // replacement that changes length shifts everything after it.
+        val blanked = HTML_COMMENT.replace(markdown) { " ".repeat(it.value.length) }
+        val lines = mutableListOf<String>()
+        val lineStarts = mutableListOf<Int>()
+        var cursor = 0
+        while (cursor <= blanked.length) {
+            val breakAt = BREAK.find(blanked, cursor)
+            val lineEnd = breakAt?.range?.first ?: blanked.length
+            lines += blanked.substring(cursor, lineEnd)
+            lineStarts += cursor
+            if (breakAt == null) break
+            cursor = breakAt.range.last + 1
+        }
+
+        val out = Blocks()
         val paragraph = StringBuilder()
+        var paragraphFrom = 0
+        var paragraphTo = 0
         // Code is accumulated separately from prose: inside a fence the markup
         // characters are literal, so this text must not be run through the
         // inline stripper on its way out.
         val code = StringBuilder()
+        var codeFrom = 0
 
-        fun emit(text: String) {
+        fun sourceEndOf(line: Int) = lineStarts[line] + lines[line].length
+
+        fun emit(text: String, from: Int, to: Int) {
             val speakable = inline(text, options)
-            if (speakable.isNotBlank()) blocks += speakable.ensureSentenceEnd()
+            if (speakable.isNotBlank()) out.add(speakable.ensureSentenceEnd(), from, to)
         }
 
         fun flushParagraph() {
@@ -74,7 +147,9 @@ object MarkdownSpeech {
             val speakable = inline(text, options)
             // A paragraph usually punctuates itself; only rescue the ones that
             // do not, so ordinary prose keeps whatever ending it had.
-            if (speakable.isNotBlank()) blocks += speakable.ensureSentenceEnd()
+            if (speakable.isNotBlank()) {
+                out.add(speakable.ensureSentenceEnd(), paragraphFrom, paragraphTo)
+            }
         }
 
         var index = skipFrontMatter(lines)
@@ -82,6 +157,8 @@ object MarkdownSpeech {
 
         while (index < lines.size) {
             val raw = lines[index]
+            val lineFrom = lineStarts[index]
+            val lineTo = sourceEndOf(index)
 
             // Fenced code: the closing fence has to be at least as long as the
             // opening one and made of the same character, so a ``` block that
@@ -96,7 +173,7 @@ object MarkdownSpeech {
                 if (closes) {
                     fenceMarker = null
                     if (code.isNotEmpty()) {
-                        blocks += code.toString().ensureSentenceEnd()
+                        out.add(code.toString().ensureSentenceEnd(), codeFrom, lineTo)
                         code.setLength(0)
                     }
                 } else if (options.speakCodeBlocks) {
@@ -108,8 +185,9 @@ object MarkdownSpeech {
             if (fence != null) {
                 flushParagraph()
                 fenceMarker = fence.groupValues[1]
+                codeFrom = lineFrom
                 if (!options.speakCodeBlocks && options.codeBlockPlaceholder.isNotEmpty()) {
-                    blocks += options.codeBlockPlaceholder.ensureSentenceEnd()
+                    out.add(options.codeBlockPlaceholder.ensureSentenceEnd(), lineFrom, lineTo)
                 }
                 index++
                 continue
@@ -137,7 +215,7 @@ object MarkdownSpeech {
             val heading = ATX_HEADING.matchEntire(line)
             if (heading != null) {
                 flushParagraph()
-                emit(heading.groupValues[2])
+                emit(heading.groupValues[2], lineFrom, lineTo)
                 index++
                 continue
             }
@@ -147,7 +225,7 @@ object MarkdownSpeech {
             val next = lines.getOrNull(index + 1)
             if (next != null && SETEXT_UNDERLINE.matches(next) && !THEMATIC_BREAK.matches(next)) {
                 flushParagraph()
-                emit(line)
+                emit(line, lineFrom, sourceEndOf(index + 1))
                 index += 2
                 continue
             }
@@ -162,7 +240,9 @@ object MarkdownSpeech {
                     val cells = line.trim().trim('|').split('|')
                         .map { inline(it.trim(), options) }
                         .filter { it.isNotBlank() }
-                    if (cells.isNotEmpty()) blocks += cells.joinToString(", ").ensureSentenceEnd()
+                    if (cells.isNotEmpty()) {
+                        out.add(cells.joinToString(", ").ensureSentenceEnd(), lineFrom, lineTo)
+                    }
                     index++
                     continue
                 }
@@ -178,19 +258,53 @@ object MarkdownSpeech {
                 // carries no information worth speaking.
                 val prefix = ordered?.let { "${it.groupValues[1]}. " } ?: ""
                 val speakable = inline(body, options)
-                if (speakable.isNotBlank()) blocks += (prefix + speakable).ensureSentenceEnd()
+                if (speakable.isNotBlank()) {
+                    out.add((prefix + speakable).ensureSentenceEnd(), lineFrom, lineTo)
+                }
                 index++
                 continue
             }
 
+            if (paragraph.isEmpty()) paragraphFrom = lineFrom
+            paragraphTo = lineTo
             paragraph.appendSpaced(line.trim())
             index++
         }
         flushParagraph()
         // An unterminated fence still has content worth speaking.
-        if (code.isNotEmpty()) blocks += code.toString().ensureSentenceEnd()
+        if (code.isNotEmpty()) {
+            out.add(code.toString().ensureSentenceEnd(), codeFrom, blanked.length)
+        }
 
-        return blocks.joinToString("\n\n")
+        return out.build()
+    }
+
+    /** Collects blocks with the source range each was made from. */
+    private class Blocks {
+        private val texts = mutableListOf<String>()
+        private val from = mutableListOf<Int>()
+        private val to = mutableListOf<Int>()
+
+        fun add(text: String, sourceStart: Int, sourceEnd: Int) {
+            texts += text
+            from += sourceStart
+            to += sourceEnd
+        }
+
+        fun build(): Speakable {
+            val joined = texts.joinToString(SEPARATOR)
+            val spans = mutableListOf<Span>()
+            var at = 0
+            for (i in texts.indices) {
+                spans += Span(at, at + texts[i].length, from[i], to[i])
+                at += texts[i].length + SEPARATOR.length
+            }
+            return Speakable(joined, spans)
+        }
+
+        private companion object {
+            const val SEPARATOR = "\n\n"
+        }
     }
 
     /** Strips inline Markdown from a single run of text. */

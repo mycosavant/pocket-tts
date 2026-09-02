@@ -143,6 +143,27 @@ object Reader {
     var speakableText: String = ""
         private set
 
+    /**
+     * Where the spoken text came from, for a screen that wants to follow along.
+     *
+     * A [State.Speaking] reports offsets into [speakableText], and stripping
+     * deleted syntax, so those offsets are not positions in the document the
+     * user is looking at. This turns one into the other.
+     */
+    @Volatile
+    private var sourceMap: MarkdownSpeech.Speakable? = null
+
+    /**
+     * The range of [source] currently being spoken, or null if it cannot be
+     * placed - because nothing is being read, or because [source] is no longer
+     * the text that was read.
+     */
+    fun spokenRangeIn(source: String): IntRange? {
+        val speaking = _state.value as? State.Speaking ?: return null
+        val map = sourceMap ?: return null
+        return map.sourceRange(speaking.start, speaking.end, source)
+    }
+
     private val control = Mutex()
     private var job: Job? = null
     private var player: AudioSink? = null
@@ -219,6 +240,7 @@ object Reader {
         currentUtterance = 0
         chunkIndex = 0
         speakableText = ""
+        sourceMap = null
         _state.value = State.Idle
     }
 
@@ -293,15 +315,24 @@ object Reader {
         source: Source,
     ) {
         val settings = Settings(context)
-        val speakable = if (treatAsMarkdown) {
-            MarkdownSpeech.toSpeakable(
+        val mapped = if (treatAsMarkdown) {
+            MarkdownSpeech.toSpeakableWithSource(
                 text,
                 MarkdownSpeech.Options(speakCodeBlocks = settings.speakCodeBlocks),
             )
         } else {
-            text.trim()
+            // Nothing was stripped, so the speakable text is the source and the
+            // offsets need no translating.
+            val trimmed = text.trim()
+            val offset = text.indexOf(trimmed).coerceAtLeast(0)
+            MarkdownSpeech.Speakable(
+                trimmed,
+                listOf(MarkdownSpeech.Span(0, trimmed.length, offset, offset + trimmed.length)),
+            )
         }
+        val speakable = mapped.text
         speakableText = speakable
+        sourceMap = mapped
 
         if (speakable.isBlank()) {
             _state.value = State.Finished(id, source)

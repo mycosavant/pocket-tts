@@ -46,21 +46,6 @@
         android:textAppearance="?attr/textAppearanceBodyLarge"
         android:importantForAutofill="no" />
 
-    <ScrollView
-        android:id="@+id/previewScroll"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:padding="16dp"
-        android:visibility="gone">
-
-        <TextView
-            android:id="@+id/previewText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textAppearance="?attr/textAppearanceBodyLarge"
-            android:textIsSelectable="true" />
-    </ScrollView>
     </LinearLayout>
 
         <org.pockettts.android.ui.GlassPanelView

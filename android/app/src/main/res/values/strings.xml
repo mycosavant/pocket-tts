@@ -29,8 +29,6 @@
     <string name="treat_as_markdown">Strip Markdown from selected text</string>
 
     <string name="scratchpad_hint">Type or paste Markdown here…</string>
-    <string name="preview">Preview</string>
-    <string name="edit">Edit</string>
     <string name="speak">Speak</string>
     <string name="speak_selection">Speak selection</string>
     <string name="clear">Clear</string>

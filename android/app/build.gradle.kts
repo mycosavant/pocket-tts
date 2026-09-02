@@ -78,7 +78,6 @@ dependencies {
     implementation(libs.material)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.commons.compress)
-    implementation(libs.markwon.core)
 
     // The AAR is depended on directly rather than through the JitPack parent
     // POM, which also pulls sherpa-onnx-jvm and the desktop native-lib jars -

@@ -15,7 +15,6 @@ androidx-recyclerview = { module = "androidx.recyclerview:recyclerview", version
 material = { module = "com.google.android.material:material", version = "1.12.0" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 commons-compress = { module = "org.apache.commons:commons-compress", version = "1.27.1" }
-markwon-core = { module = "io.noties.markwon:core", version = "4.6.2" }
 
 junit = { module = "junit:junit", version = "4.13.2" }
 robolectric = { module = "org.robolectric:robolectric", version = "4.14.1" }

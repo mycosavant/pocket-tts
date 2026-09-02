@@ -2,6 +2,8 @@ package org.pockettts.android.ui
 
 import android.content.Intent
 import android.os.Bundle
+import android.text.Spanned
+import android.text.style.BackgroundColorSpan
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
@@ -9,9 +11,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.core.graphics.ColorUtils
 import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.color.MaterialColors
 import kotlinx.coroutines.launch
-import io.noties.markwon.Markwon
 import org.pockettts.android.R
 import org.pockettts.android.databinding.ActivityScratchpadBinding
 import org.pockettts.android.engine.Settings
@@ -39,8 +42,6 @@ class ScratchpadActivity : AppCompatActivity() {
      * overlay, and a previous read's ending must not dismiss it.
      */
     private var utterance: Long = 0
-    private val markwon: Markwon by lazy { Markwon.create(this) }
-    private var showingPreview = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -110,18 +111,11 @@ class ScratchpadActivity : AppCompatActivity() {
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menu.add(0, MENU_PREVIEW, 0, R.string.preview).setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
-        menu.add(0, MENU_CLEAR, 1, R.string.clear)
+        menu.add(0, MENU_CLEAR, 0, R.string.clear)
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
-        MENU_PREVIEW -> {
-            togglePreview()
-            item.setTitle(if (showingPreview) R.string.edit else R.string.preview)
-            true
-        }
-
         MENU_CLEAR -> {
             binding.editor.setText("")
             settings.scratchpad = ""
@@ -131,25 +125,13 @@ class ScratchpadActivity : AppCompatActivity() {
         else -> super.onOptionsItemSelected(item)
     }
 
-    private fun togglePreview() {
-        showingPreview = !showingPreview
-        if (showingPreview) {
-            markwon.setMarkdown(binding.previewText, binding.editor.text.toString())
-            binding.editor.visibility = View.GONE
-            binding.previewScroll.visibility = View.VISIBLE
-        } else {
-            binding.previewScroll.visibility = View.GONE
-            binding.editor.visibility = View.VISIBLE
-        }
-    }
-
     private fun speak() {
         val full = binding.editor.text.toString()
         // A selection in the editor means "read this bit", which is the natural
         // way to re-listen to one paragraph without deleting the rest.
         val start = binding.editor.selectionStart
         val end = binding.editor.selectionEnd
-        val text = if (!showingPreview && start in 0 until end) {
+        val text = if (start in 0 until end) {
             full.substring(start, end)
         } else {
             full
@@ -177,6 +159,49 @@ class ScratchpadActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Marks the sentence being spoken, in the editor the user is looking at.
+     *
+     * A span rather than a selection: moving the selection would fight the
+     * cursor and the text-selection toolbar, and following along is not the
+     * same act as selecting.
+     */
+    private fun highlightSpoken() {
+        val editable = binding.editor.text ?: return
+        editable.getSpans(0, editable.length, SpokenSpan::class.java)
+            .forEach { editable.removeSpan(it) }
+
+        val range = Reader.spokenRangeIn(editable.toString()) ?: return
+        val start = range.first.coerceIn(0, editable.length)
+        val end = (range.last + 1).coerceIn(start, editable.length)
+        if (start == end) return
+
+        editable.setSpan(
+            SpokenSpan(highlightColour),
+            start,
+            end,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+        )
+        // Only follow if the reader has moved somewhere the user is not
+        // already looking; yanking the view while they are reading ahead or
+        // editing is worse than not following at all.
+        if (!binding.editor.hasSelection() && !binding.editor.isFocused) {
+            binding.editor.bringPointIntoView(start)
+        }
+    }
+
+    private fun clearHighlight() {
+        val editable = binding.editor.text ?: return
+        editable.getSpans(0, editable.length, SpokenSpan::class.java)
+            .forEach { editable.removeSpan(it) }
+    }
+
+    private val highlightColour: Int
+        get() = ColorUtils.setAlphaComponent(
+            MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary, 0),
+            HIGHLIGHT_ALPHA,
+        )
+
     private fun renderReading(state: Reader.State) {
         // The reader is process-wide, so this screen only claims the reads that
         // began here. That used to be a flag set on the Speak button and
@@ -191,7 +216,11 @@ class ScratchpadActivity : AppCompatActivity() {
         }
         binding.readingOverlay.visibility = if (reading) View.VISIBLE else View.GONE
 
-        if (!reading) return
+        if (!reading) {
+            clearHighlight()
+            return
+        }
+        highlightSpoken()
         applyAppearance()
         when (state) {
             is Reader.State.Preparing -> {
@@ -216,8 +245,13 @@ class ScratchpadActivity : AppCompatActivity() {
         }
     }
 
+    /** A background span, tagged so the previous one can be found and removed. */
+    private class SpokenSpan(colour: Int) : BackgroundColorSpan(colour)
+
     private companion object {
-        const val MENU_PREVIEW = 1
-        const val MENU_CLEAR = 2
+        const val MENU_CLEAR = 1
+
+        /** Enough to read as a highlight, not so much that the text fights it. */
+        const val HIGHLIGHT_ALPHA = 68
     }
 }

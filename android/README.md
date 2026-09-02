@@ -23,12 +23,12 @@ readers, accessibility tools. None of them need to know this app exists. Audio
 is streamed back chunk by chunk as it is generated, so playback starts after the
 first sentence rather than the last one.
 
-**A Markdown scratchpad.** Type or paste, hit speak. Markdown is rendered for
-reading and stripped for speaking, so `## Heading` is spoken as "Heading" rather
-than "hash hash Heading", `**bold**` loses its asterisks, links are read as
-their text instead of spelling out a URL, and code fences are skipped by
-default. Selecting a passage in the editor and hitting speak reads just that
-passage.
+**A Markdown scratchpad.** Type or paste, hit speak. Markdown is stripped for
+speaking, so `## Heading` is spoken as "Heading" rather than "hash hash
+Heading", `**bold**` loses its asterisks, links are read as their text instead
+of spelling out a URL, and code fences are skipped by default. Selecting a
+passage in the editor and hitting speak reads just that passage, and the
+sentence being spoken is highlighted as it goes.
 
 **Any Pocket TTS voice, including your own.** Pocket TTS has no fixed speaker
 table - a voice is a few seconds of reference audio the model conditions on - so
@@ -121,6 +121,29 @@ other apps ─────▶ PocketTtsService ───┘      ▼
 
 `MarkdownSpeech`, `TextChunker` and `WavReader` are plain JVM code and are
 covered by unit tests in `app/src/test`.
+
+## Following along
+
+`Speaking` reports the character range of the chunk being read, but those
+offsets are into the *stripped* text: stripping deletes syntax, so they drift
+further from the document with every heading, link and asterisk passed.
+`MarkdownSpeech.toSpeakableWithSource` records where each block came from, and
+`Reader.spokenRangeIn` turns one into the other.
+
+The map is per block, not per character - a block comes from a known run of
+source lines, which is cheap to track. Within a block the range is narrowed to
+the exact sentence when that sentence survived stripping unchanged, which is the
+common case for prose; a rewritten line falls back to highlighting the whole
+block, which is less precise but never wrong.
+
+Everything hard about it is in the setup rather than the algorithm. Anything
+that rewrites the string before the lines are counted silently shifts every
+offset after it, so HTML comments are blanked with spaces of equal length rather
+than removed, and line breaks are found by scanning rather than by normalising
+CRLF to LF. Both have a test, and both tests fail if the normalisation comes
+back. The CRLF one needed a second pass to be worth anything: the first version
+used text that survived stripping unchanged, so the exact-sentence search
+silently corrected the drift and the test stayed green against broken offsets.
 
 ## Two callers, one engine
 
