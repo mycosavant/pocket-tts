@@ -347,6 +347,15 @@ audible. So it is a slider on the main screen, next to Timings, and the default
 stays at 5: at what has been shipping, not at a new guess. Move it, read
 something long, and look at the generation speed.
 
+How much time it can possibly buy is bounded, and worth knowing before reading
+the number. The steps multiply one graph in the bundle - `lm_flow`, 10 MB - and
+not the 76 MB `lm_main` that runs once per frame regardless. So the ceiling on
+the saving is whatever fraction of a frame the small model accounts for, and
+that fraction is exactly the thing nobody here has measured.
+
+`docs/direct-ort.md` scopes what running these graphs ourselves would involve,
+and starts from the same reading of the bundle.
+
 ## When it crashes
 
 Sideloading onto a phone means no logcat within reach, and an app that dies
