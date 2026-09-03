@@ -460,14 +460,17 @@ an app may not read another app's pixels. Whether that works is not something to
 reason about: `WindowManager.isCrossWindowBlurEnabled` answers it. On the device
 this was built for it says no, and no value of any slider will produce a frost.
 
-What it does not say is *why*, and this app no longer guesses. The system
-withholds cross-window blur for battery saver, for Developer options →
-"Disable window blur", and on devices whose vendor never enabled it. The frosted
-panels the system draws for itself - Samsung's quick settings and app-drawer
-folders, which are lovely - are composited by a privileged process and settle
-none of it. Two of those three causes come and go, so the capability is followed
-with `addCrossWindowBlurEnabledListener` rather than read once when the screen
-opens.
+What it does not say is *why*, and this app no longer guesses. Accessibility →
+"Reduce transparency and blur" turns it off system-wide, battery saver takes it
+away too, and some devices never had it. The frosted panels the system draws for
+*itself* - Samsung's quick settings and app-drawer folders, which are lovely -
+are composited by a privileged process and settle none of it.
+
+Most of those causes come and go, so the capability is followed with
+`addCrossWindowBlurEnabledListener` rather than read once when the screen opens.
+That also makes the appearance screen the test: toggle the accessibility setting
+and the line changes under you, which answers the question without anyone having
+to be right about it in advance.
 
 The read-aloud sheet used to pretend otherwise. It drew a near-transparent
 surface, found it could not blur, and painted a hard 0.94 instead - silently
