@@ -8,6 +8,7 @@ import android.speech.tts.TextToSpeechService
 import android.speech.tts.Voice
 import android.util.Log
 import kotlinx.coroutines.runBlocking
+import org.pockettts.android.debug.VoiceTrace
 import org.pockettts.android.speech.TextChunker
 import java.io.File
 import java.nio.ByteBuffer
@@ -69,7 +70,26 @@ class PocketTtsService : TextToSpeechService() {
                 setOf(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)
             }
 
-        val voices = VoiceCatalog.voices.map { entry ->
+        // The alias, first, because it is what onGetDefaultVoiceNameFor
+        // returns. The framework resolves an engine's default voice name once
+        // per client and then sends that name back on every request
+        // thereafter, so returning a concrete id there pinned whichever voice
+        // was selected when Select to Speak or Chrome first bound - and
+        // changing the voice in this app did nothing for them until they were
+        // force-stopped. A name that means "whatever is selected now" is
+        // resolved late instead, on each request.
+        val voices = mutableListOf(
+            Voice(
+                SELECTED_VOICE,
+                Locale.ENGLISH,
+                Voice.QUALITY_VERY_HIGH,
+                Voice.LATENCY_NORMAL,
+                false,
+                features,
+            ),
+        )
+
+        voices += VoiceCatalog.voices.map { entry ->
             Voice(
                 entry.id,
                 Locale.forLanguageTag(entry.language),
@@ -80,7 +100,7 @@ class PocketTtsService : TextToSpeechService() {
                 false,
                 features,
             )
-        }.toMutableList()
+        }
 
         // Voices the user cloned from their own audio show up alongside the
         // stock ones, so any app's voice picker can select them.
@@ -98,7 +118,7 @@ class PocketTtsService : TextToSpeechService() {
     }
 
     public override fun onIsValidVoiceName(name: String?): Int =
-        if (name != null && resolveVoiceFile(name) != null) {
+        if (name == SELECTED_VOICE || (name != null && resolveVoiceFile(name) != null)) {
             TextToSpeech.SUCCESS
         } else {
             TextToSpeech.ERROR
@@ -107,7 +127,7 @@ class PocketTtsService : TextToSpeechService() {
     public override fun onLoadVoice(name: String?): Int = onIsValidVoiceName(name)
 
     public override fun onGetDefaultVoiceNameFor(lang: String?, country: String?, variant: String?): String =
-        Settings(this).voiceId
+        SELECTED_VOICE
 
     public override fun onStop() {
         stopRequested.set(true)
@@ -165,13 +185,20 @@ class PocketTtsService : TextToSpeechService() {
         try {
             runBlocking {
                 val engine = PocketTts.get(this@PocketTtsService)
-                val voice = loadRequestedVoice(engine, request.voiceName ?: settings.voiceId)
+                val voice = loadRequestedVoice(engine, request.voiceName ?: SELECTED_VOICE)
 
                 // SynthesisRequest reports the rate as a percentage, where 100
                 // is the user's normal speed.
                 val speed = (request.speechRate / 100f)
                     .coerceIn(Settings.MIN_SPEED, Settings.MAX_SPEED)
                 val steps = settings.decodeSteps
+                // The same speaker draw the in-app reader uses. This path had
+                // no continuity of any kind, so it is the one where a voice
+                // wandering per sentence was worst - and it is the path most
+                // people spend their day in, since Select to Speak and reader
+                // apps all arrive here.
+                val temperature = settings.temperature
+                val seed = settings.voiceSeed
 
                 callback.start(engine.sampleRate, AudioFormat.ENCODING_PCM_16BIT, 1)
                 val maxBytes = callback.maxBufferSize
@@ -183,7 +210,7 @@ class PocketTtsService : TextToSpeechService() {
                     // and it costs one call - the offsets are only meaningful
                     // because the text above is passed through unrewritten.
                     callback.rangeStart(chunk.start, chunk.end, 0)
-                    val completed = engine.synthesize(chunk.text, voice, speed, steps) { samples ->
+                    val completed = engine.synthesize(chunk.text, voice, speed, steps, temperature, seed) { samples ->
                         val giveUp = stopRequested.get() || EngineTurn.superseded(turn)
                         if (giveUp) false else deliver(callback, samples, maxBytes)
                     }
@@ -203,11 +230,30 @@ class PocketTtsService : TextToSpeechService() {
 
     private suspend fun loadRequestedVoice(
         engine: PocketTts,
-        name: String,
+        requested: String,
     ): PocketTts.LoadedVoice {
-        VoiceCatalog.byId(name)?.let { return engine.loadVoice(it) }
-        resolveVoiceFile(name)?.let { return engine.loadVoiceFile(name, it) }
-        return engine.loadVoice(VoiceCatalog.default())
+        val settings = Settings(this)
+        // Resolved now rather than when the caller bound; see onGetVoices.
+        val name = if (requested == SELECTED_VOICE) settings.voiceId else requested
+        val manager = ModelManager(this)
+
+        VoiceCatalog.byId(name)?.let { stock ->
+            VoiceTrace.resolved("system", requested, name, manager.voiceFile(name).length(), stock.bytes)
+            return engine.loadVoice(stock)
+        }
+        resolveVoiceFile(name)?.let { file ->
+            VoiceTrace.resolved("system", requested, name, file.length(), 0)
+            return engine.loadVoiceFile(name, file)
+        }
+        val fallback = VoiceCatalog.default()
+        VoiceTrace.resolved(
+            caller = "system",
+            requested = requested,
+            resolved = fallback.id,
+            promptBytes = manager.voiceFile(fallback.id).length(),
+            expectedBytes = fallback.bytes,
+        )
+        return engine.loadVoice(fallback)
     }
 
     private fun resolveVoiceFile(name: String): File? {
@@ -254,6 +300,15 @@ class PocketTtsService : TextToSpeechService() {
 
     private companion object {
         const val TAG = "PocketTtsService"
+
+        /**
+         * A voice name that means "whatever is selected in the app right now".
+         *
+         * Not a voice: an indirection, resolved on each request rather than
+         * when a client bound. Apps that offer their own voice picker still
+         * send concrete ids and still get them.
+         */
+        const val SELECTED_VOICE = "selected"
         const val ISO3_ENGLISH = "eng"
         const val SAMPLE_RATE_FALLBACK = 24000
         val supportedCountries = listOf("USA", "GBR")

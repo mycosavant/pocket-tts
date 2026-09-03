@@ -5,6 +5,7 @@ import android.os.Build
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -113,5 +114,41 @@ class VoiceStorageTest {
         File(voices, stock.fileName).writeBytes(wav())
 
         assertTrue("the stock prompt was migrated as if imported", manager.importedVoices().isEmpty())
+    }
+
+    @Test
+    fun `a stock prompt of the wrong size is not treated as cached`() {
+        // The permanent one. An import named like a stock voice overwrote that
+        // voice's prompt, and because any non-empty file counted as cached,
+        // nothing ever fetched the real one again - so every "Alba" from that
+        // day on was read in someone else's voice, silently, on every build.
+        val alba = VoiceCatalog.byId("alba")!!
+        voices.mkdirs()
+        File(voices, alba.fileName).writeBytes(wav())
+
+        assertFalse(
+            "someone else's recording was accepted as Alba's prompt",
+            manager.isCached(alba),
+        )
+    }
+
+    @Test
+    fun `the real prompt is treated as cached`() {
+        val alba = VoiceCatalog.byId("alba")!!
+        voices.mkdirs()
+        // Not the real audio - the check is a size, which is what a stat can
+        // see and what distinguishes a different recording.
+        File(voices, alba.fileName).writeBytes(ByteArray(alba.bytes.toInt()))
+
+        assertTrue(manager.isCached(alba))
+    }
+
+    @Test
+    fun `every stock voice carries the size it ships as`() {
+        // Read from Hugging Face rather than guessed. A zero here would make
+        // the check above vacuous for that voice.
+        VoiceCatalog.voices.forEach {
+            assertTrue("${it.id} has no expected size", it.bytes > 0)
+        }
     }
 }

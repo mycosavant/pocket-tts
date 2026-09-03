@@ -19,20 +19,11 @@ class FakeEngine(
     var voiceId: String? = null
         private set
 
-    /** What each call was conditioned on: null for the voice's own prompt. */
-    val conditionedOn = mutableListOf<FloatArray?>()
-    private var continuation: FloatArray? = null
-
     /** Completed by the test to let a synthesis call finish, when it wants control. */
     var gate: CompletableDeferred<Unit>? = null
 
     override suspend fun useVoice(voiceId: String) {
         this.voiceId = voiceId
-        continuation = null
-    }
-
-    override fun continueFrom(audio: FloatArray?) {
-        continuation = audio
     }
 
     override suspend fun synthesize(
@@ -48,7 +39,6 @@ class FakeEngine(
         // the window open without slowing the suite.
         delay(WORK_MILLIS)
         spoken += text
-        conditionedOn += continuation
         if (text == failOn) throw IllegalStateException("synthesis exploded")
         gate?.await()
         return onAudio(FloatArray(sampleRate / 10))

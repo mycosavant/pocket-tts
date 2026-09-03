@@ -22,6 +22,7 @@ import org.pockettts.android.R
 import org.pockettts.android.databinding.ActivityMainBinding
 import org.pockettts.android.debug.CrashLog
 import org.pockettts.android.debug.Metrics
+import org.pockettts.android.debug.VoiceTrace
 import org.pockettts.android.debug.ExitReasons
 import org.pockettts.android.engine.ModelInstall
 import org.pockettts.android.engine.ModelManager
@@ -48,6 +49,13 @@ class MainActivity : AppCompatActivity() {
 
         binding.downloadButton.setOnClickListener { startDownload() }
         binding.timingsButton.setOnClickListener { showTimings() }
+        binding.temperatureSlider.addOnChangeListener { _, value, fromUser ->
+            if (fromUser) {
+                settings.temperature = value
+                binding.temperatureLabel.text =
+                    getString(R.string.temperature, settings.temperature)
+            }
+        }
         binding.stepsSlider.addOnChangeListener { _, value, fromUser ->
             if (fromUser) {
                 settings.decodeSteps = value.toInt()
@@ -182,6 +190,13 @@ class MainActivity : AppCompatActivity() {
             binding.speedSlider.stepSize,
         )
         binding.speedLabel.text = getString(R.string.speed, settings.speed)
+        binding.temperatureSlider.value = GlassValues.snapToStep(
+            settings.temperature,
+            binding.temperatureSlider.valueFrom,
+            binding.temperatureSlider.valueTo,
+            binding.temperatureSlider.stepSize,
+        )
+        binding.temperatureLabel.text = getString(R.string.temperature, settings.temperature)
         binding.stepsSlider.value = settings.decodeSteps.toFloat()
             .coerceIn(binding.stepsSlider.valueFrom, binding.stepsSlider.valueTo)
         binding.stepsLabel.text = getString(R.string.decode_steps, settings.decodeSteps)
@@ -205,7 +220,10 @@ class MainActivity : AppCompatActivity() {
      * the exit report turned "it crashed" into a reason.
      */
     private fun showTimings() {
+        // The voice trace goes in the same report because the two questions
+        // are asked together: what it sounded like, and who was speaking.
         val report = "${Metrics.report()}\n\n" +
+            "Voice trace\n${VoiceTrace.report()}\n\n" +
             CrashLog.deviceMetadata(this).entries.joinToString("\n") { "${it.key}: ${it.value}" }
 
         MaterialAlertDialogBuilder(this)

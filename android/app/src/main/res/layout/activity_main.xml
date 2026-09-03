@@ -63,6 +63,29 @@
 
 
             <TextView
+                android:id="@+id/temperatureLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/temperature_explained"
+                android:textAppearance="?attr/textAppearanceBodySmall"
+                android:textColor="?attr/colorOnSurfaceVariant" />
+
+            <com.google.android.material.slider.Slider
+                android:id="@+id/temperatureSlider"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:stepSize="0.05"
+                android:value="0.3"
+                android:valueFrom="0.1"
+                android:valueTo="1.0" />
+
+            <TextView
                 android:id="@+id/stepsLabel"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
