@@ -82,7 +82,7 @@
     <string name="preview_backdrop_body">This text is blurred by the same code the real overlay uses, so what you dial in here is what ships.</string>
     <string name="preview_panel_body">Panel sample text</string>
     <string name="capability_cross_window">Cross-window blur: supported. Panels over other apps will frost them.</string>
-    <string name="capability_in_app_only">Cross-window blur: unsupported on this device — Samsung does not enable it on One UI. In-app blur (RenderEffect) works, so the scratchpad overlay frosts properly; a panel over another app gets an opaque surface instead, because no app may read another app\'s pixels.</string>
+    <string name="capability_in_app_only">Cross-window blur: the system reports it unavailable right now. In-app blur works, so the scratchpad overlay frosts; a panel over another app gets an opaque surface instead, because no app may read another app\'s pixels. The system withholds it for battery saver, for Developer options → “Disable window blur”, and on devices whose vendor never enabled it — the frosted panels the system draws for itself are made by a privileged process and do not settle which of those it is here.</string>
     <string name="capability_none">Blur needs Android 12 or newer. Panels use a solid surface.</string>
 
     <!-- What the live preview panel actually did on its last frame. -->

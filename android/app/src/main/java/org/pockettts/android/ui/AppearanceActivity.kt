@@ -24,6 +24,7 @@ class AppearanceActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityAppearanceBinding
     private lateinit var settings: Settings
+    private var capabilityWatch: AutoCloseable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -37,13 +38,7 @@ class AppearanceActivity : AppCompatActivity() {
         binding.toolbar.setNavigationOnClickListener { finish() }
         Insets.apply(top = binding.appBar, bottom = binding.content)
 
-        binding.capability.text = getString(
-            when (Glass.capability(this)) {
-                Glass.Capability.CROSS_WINDOW -> R.string.capability_cross_window
-                Glass.Capability.IN_APP_ONLY -> R.string.capability_in_app_only
-                Glass.Capability.NONE -> R.string.capability_none
-            },
-        )
+        showCapability(Glass.capability(this))
 
         // The panel reports which branch it drew on every frame. Without this
         // the capture can decline silently and the screen looks identical to
@@ -67,6 +62,32 @@ class AppearanceActivity : AppCompatActivity() {
         }
 
         render()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Followed rather than read once: battery saver and the developer
+        // option both take cross-window blur away and give it back, and a line
+        // that answered from whenever the screen opened would be stale in a way
+        // nobody could see.
+        capabilityWatch = Glass.followCapability(this) { showCapability(it) }
+        showCapability(Glass.capability(this))
+    }
+
+    override fun onStop() {
+        super.onStop()
+        capabilityWatch?.close()
+        capabilityWatch = null
+    }
+
+    private fun showCapability(capability: Glass.Capability) {
+        binding.capability.text = getString(
+            when (capability) {
+                Glass.Capability.CROSS_WINDOW -> R.string.capability_cross_window
+                Glass.Capability.IN_APP_ONLY -> R.string.capability_in_app_only
+                Glass.Capability.NONE -> R.string.capability_none
+            },
+        )
     }
 
     /**

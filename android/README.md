@@ -456,12 +456,18 @@ Blurring depends entirely on what is behind the panel, and the two cases have
 different answers.
 
 Behind **another app**, only `Window.setBackgroundBlurRadius` can blur, because
-an app may not read another app's pixels. That API is gated on a vendor opt-in
-(`ro.surface_flinger.supports_background_blur`) and Samsung does not set it -
-their [developer forum](https://forum.developer.samsung.com/t/why-does-oneui-not-support-crosswindowblur/34386)
-confirms cross-window blur is unsupported across One UI. So on most devices
-there is nothing behind that panel to frost, and no value of any setting will
-produce one.
+an app may not read another app's pixels. Whether that works is not something to
+reason about: `WindowManager.isCrossWindowBlurEnabled` answers it. On the device
+this was built for it says no, and no value of any slider will produce a frost.
+
+What it does not say is *why*, and this app no longer guesses. The system
+withholds cross-window blur for battery saver, for Developer options →
+"Disable window blur", and on devices whose vendor never enabled it. The frosted
+panels the system draws for itself - Samsung's quick settings and app-drawer
+folders, which are lovely - are composited by a privileged process and settle
+none of it. Two of those three causes come and go, so the capability is followed
+with `addCrossWindowBlurEnabledListener` rather than read once when the screen
+opens.
 
 The read-aloud sheet used to pretend otherwise. It drew a near-transparent
 surface, found it could not blur, and painted a hard 0.94 instead - silently
@@ -493,10 +499,43 @@ nothing, because for three of the four that was exactly true. Both views are now
 located against the root they share and the difference is taken, which is
 correct for siblings, cousins and ancestors alike.
 
-Because that failure has no visual signature - a panel that quietly gave up
+The capture also has to start opaque, which is the second way this looked
+broken. A backdrop view usually has no background of its own - it is letting the
+window's background show through - so recording it captures its text on
+transparency. Blur that, composite it, and the blurred copy lands *on top of*
+the original, which is still there and still sharp underneath. Only the dim and
+the tint appeared to do anything, and the panel read exactly like one whose blur
+was not working.
+
+That is why the appearance preview frosted convincingly while the real
+scratchpad overlay did not: the preview's backdrop has a background and a row of
+colour swatches, and the editor behind the overlay has neither. The panel now
+fills the capture with the window background before drawing the backdrop into
+it, so the blur has something solid to work on and the result covers what is
+underneath instead of ghosting over it. Nothing about the backdrop's own layout
+is required any more.
+
+Because these failures have no visual signature - a panel that quietly gave up
 looks like settings that were never wired - every frame records *why* it drew
 what it drew in `lastDraw`, and the appearance screen prints it. A log line is
-no use on a phone with no logcat within reach.
+no use on a phone with no logcat within reach. It is worth saying that
+`lastDraw` did *not* catch either of the two faults above: both reported
+`BLURRED`, because the capture genuinely ran. It answers "did the blur path
+execute", which is a narrower question than "did anything blur".
+
+## The keyboard is not the window's problem any more
+
+The scratchpad's Speak and Stop buttons sat under the keyboard. `adjustResize`
+is in the manifest and does nothing: a window laid out edge to edge - which
+`targetSdk 35` makes every window - is no longer resized when the keyboard
+opens. It is handed the keyboard's size in the insets and expected to deal with
+it. Nothing warns you, and the symptom is that reaching the control means
+dismissing the keyboard you were typing with.
+
+`ui/Insets` now pays back the maximum of the system bars and the IME, rather
+than the system bars alone. The maximum and not the sum: the keyboard is drawn
+over the navigation bar, so its inset already contains it, and adding them
+leaves a gap exactly one navigation bar tall.
 
 This is the technique [Haze](https://chrisbanes.github.io/haze/) uses on
 Android. Haze is Compose Multiplatform and this app is Views, so the technique
