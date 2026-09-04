@@ -12,6 +12,7 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -270,5 +271,39 @@ class GlassPanelViewTest {
         fixture.panel.backdrop = null
         fixture.panel.configure()
         draw(fixture.panel)
+    }
+
+    @Test
+    fun `the capture is given something opaque to blur`() {
+        // A backdrop with no background of its own records as its content on
+        // transparency. Blurring that and compositing it leaves the sharp
+        // original showing straight through the gaps, so the panel looks
+        // exactly like one whose blur does nothing - which is what the
+        // scratchpad overlay looked like for two releases while the appearance
+        // preview, whose backdrop does have a background, frosted correctly.
+        val (panel, backdrop, _) = siblings()
+        panel.configure(
+            alpha = 0.4f,
+            blurDp = 20f,
+            dim = 0f,
+            cornerDp = 8f,
+            surface = Color.WHITE,
+            outline = Color.GRAY,
+        )
+
+        assertEquals(
+            "the capture would start transparent, so the blur has nothing to cover",
+            255,
+            Color.alpha(panel.backdropBase),
+        )
+        assertNotNull(backdrop)
+    }
+
+    @Test
+    fun `the window background is opaque, or the base is no base at all`() {
+        // The whole of the fix above rests on this resolving to something
+        // solid. A theme that left it transparent would make the change a
+        // no-op that still reads as done.
+        assertEquals(255, Color.alpha(Glass.windowBackground(context)))
     }
 }

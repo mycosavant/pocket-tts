@@ -96,6 +96,26 @@ class GlassPanelView @JvmOverloads constructor(
             invalidate()
         }
 
+    /**
+     * What the capture is painted onto before the backdrop is drawn into it.
+     *
+     * A backdrop with no background of its own - an ordinary layout, which is
+     * most of them - records as its content on transparency. Blurring that and
+     * compositing it over the screen puts a faint blurred ghost *on top of* the
+     * original, which is still there, still sharp, showing straight through the
+     * gaps. The panel then looks exactly like one whose blur is not working,
+     * and only the dim and the tint appear to do anything.
+     *
+     * So the capture starts opaque. The window's own background is the right
+     * colour: it is what the backdrop is sitting on, and what the eye expects
+     * to see behind the text being frosted.
+     */
+    var backdropBase: Int = Color.TRANSPARENT
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     /** What the last frame drew. Changes are reported via [onDrawModeChanged]. */
     var lastDraw: DrawMode = DrawMode.NO_BACKDROP
         private set
@@ -139,7 +159,9 @@ class GlassPanelView @JvmOverloads constructor(
         cornerDp: Float,
         surface: Int,
         outline: Int,
+        base: Int = Glass.windowBackground(context),
     ) {
+        backdropBase = base
         blurRadiusPx = dp(blurDp)
         cornerRadiusPx = dp(cornerDp)
         tint = ColorUtils.setAlphaComponent(surface, (alpha.coerceIn(0f, 1f) * 255).toInt())
@@ -228,6 +250,10 @@ class GlassPanelView @JvmOverloads constructor(
 
         val recording = target.beginRecording(captureWidth, captureHeight)
         try {
+            // Before anything else, so the blur has opaque material to work on
+            // and the result covers the live content rather than ghosting over
+            // it. See backdropBase.
+            recording.drawColor(backdropBase)
             // Shift the source so the slice behind this panel lands at the
             // node's origin, with the pad exposed on every side.
             recording.translate(pad - offsetX, pad - offsetY)

@@ -50,22 +50,55 @@ class Settings(context: Context) {
         set(value) = prefs.edit { putBoolean(KEY_CODE_BLOCKS, value) }
 
     /**
-     * Whether each sentence is conditioned on the one before it.
+     * Whether every sentence draws the same speaker.
      *
-     * Pocket TTS is prompted with a few seconds of reference audio and samples
-     * a speaker in its neighbourhood, so the same prompt gives a slightly
-     * different voice every call - and a read is many calls, one per sentence.
-     * Handing the audio just spoken back as the prompt for the next sentence
-     * continues the voice instead of drawing a new one. Upstream names this as
-     * the fix, as a TODO against the same behaviour.
+     * Pocket TTS has no speaker table: it is prompted with a few seconds of
+     * reference audio and *samples* a speaker in that audio's neighbourhood.
+     * The draw is a vector of Gaussian noise, and sherpa-onnx seeds it from a
+     * random device on every sentence - not every read, every sentence, since
+     * it re-splits whatever it is given on sentence-ending punctuation and
+     * starts each one from a fresh generator. So a paragraph is read by a
+     * succession of slightly different people, which is what "the voice keeps
+     * changing" is.
      *
-     * A setting rather than a constant because the trade is real: conditioning
-     * on generated audio can also let the voice wander over a long read, and
-     * which of the two is worse can only be settled by listening.
+     * Pinning the seed makes that noise identical for every sentence, so the
+     * same prompt yields the same speaker throughout - and, because the seed
+     * is per-generation rather than per-anything-of-ours, on the system engine
+     * as well as in the app.
+     *
+     * Off means a fresh draw each sentence, which is sherpa's own default and
+     * worth keeping reachable: a fixed seed also fixes the reading, so the
+     * same text always comes out identically, and someone re-reading a
+     * paragraph to hear it differently wants the variation back.
      */
     var steadyVoice: Boolean
         get() = prefs.getBoolean(KEY_STEADY_VOICE, true)
         set(value) = prefs.edit { putBoolean(KEY_STEADY_VOICE, value) }
+
+    /** The seed to hand the generator, or -1 for a fresh draw each sentence. */
+    val voiceSeed: Int get() = if (steadyVoice) FIXED_SEED else RANDOM_SEED
+
+    /**
+     * How far from the voice prompt a speaker may be drawn.
+     *
+     * The generator's noise has standard deviation sqrt(temperature), so this
+     * sets the width of the neighbourhood the speaker is sampled from. Higher
+     * is more varied and less like the prompt.
+     *
+     * sherpa-onnx defaults to 0.7. Kyutai moved English to 0.3 in this same
+     * repository - "Human evaluations consistently prefer the English model at
+     * temperature 0.3 over the current default 0.7, and the change is free on
+     * every objective axis we measured" - and this app followed them, because
+     * shipping the wider default was not a decision anyone here made.
+     *
+     * Their 0.3 is recorded against english.yaml and english_2026-04.yaml, and
+     * the bundle this app downloads is english_2026-01, so it is a strong
+     * prior rather than a measured value for this exact snapshot. Hence a
+     * slider.
+     */
+    var temperature: Float
+        get() = prefs.getFloat(KEY_TEMPERATURE, DEFAULT_TEMPERATURE).coerceIn(MIN_TEMPERATURE, MAX_TEMPERATURE)
+        set(value) = prefs.edit { putFloat(KEY_TEMPERATURE, value.coerceIn(MIN_TEMPERATURE, MAX_TEMPERATURE)) }
 
     /** Whether text arriving from other apps is treated as Markdown. */
     var treatSelectionAsMarkdown: Boolean
@@ -118,6 +151,22 @@ class Settings(context: Context) {
         /** sherpa-onnx's own default, so nothing changes until it is changed. */
         const val DEFAULT_DECODE_STEPS = 5
 
+        const val MIN_TEMPERATURE = 0.1f
+        const val MAX_TEMPERATURE = 1.0f
+
+        /** Kyutai's preferred value for English, not sherpa-onnx's 0.7. */
+        const val DEFAULT_TEMPERATURE = 0.3f
+
+        /**
+         * Any value at all, as long as it never changes. It is not a quality
+         * of the voice - it selects one draw out of the prompt's neighbourhood,
+         * and all that matters is that every sentence selects the same one.
+         */
+        const val FIXED_SEED = 1
+
+        /** sherpa-onnx's "seed from a random device", which it takes as -1. */
+        const val RANDOM_SEED = -1
+
         const val MAX_BLUR_DP = 80f
         const val MAX_CORNER_DP = 48f
 
@@ -146,6 +195,7 @@ class Settings(context: Context) {
         private const val KEY_CODE_BLOCKS = "speak_code_blocks"
         private const val KEY_SELECTION_MARKDOWN = "selection_markdown"
         private const val KEY_STEADY_VOICE = "steady_voice"
+        private const val KEY_TEMPERATURE = "temperature"
         private const val KEY_SCRATCHPAD = "scratchpad"
         private const val KEY_GLASS_ALPHA = "glass_alpha"
         private const val KEY_GLASS_BLUR = "glass_blur_dp"

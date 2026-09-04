@@ -5,6 +5,7 @@ import org.pockettts.android.engine.ModelManager
 import org.pockettts.android.engine.PocketTts
 import org.pockettts.android.engine.Settings
 import org.pockettts.android.engine.VoiceCatalog
+import org.pockettts.android.debug.VoiceTrace
 
 /** [SpeechEngine] backed by the real model. */
 class PocketTtsEngine(
@@ -16,21 +17,10 @@ class PocketTtsEngine(
 
     private var voice: PocketTts.LoadedVoice? = null
 
-    /** Reference audio to continue from, in place of the voice's prompt. */
-    private var continuation: PocketTts.LoadedVoice? = null
-
     override val sampleRate: Int get() = tts.sampleRate
 
     override suspend fun useVoice(voiceId: String) {
         voice = resolve(voiceId)
-        continuation = null
-    }
-
-    override fun continueFrom(audio: FloatArray?) {
-        // The samples come straight from this engine's own output, so they are
-        // already at the model's rate and need no conversion.
-        continuation = audio?.takeIf { it.isNotEmpty() }
-            ?.let { PocketTts.LoadedVoice(CONTINUATION_ID, it, tts.sampleRate) }
     }
 
     override suspend fun synthesize(
@@ -38,31 +28,57 @@ class PocketTtsEngine(
         speed: Float,
         onAudio: (FloatArray) -> Boolean,
     ): Boolean {
-        val loaded = continuation
-            ?: voice
-            ?: resolve(VoiceCatalog.DEFAULT_VOICE_ID).also { voice = it }
-        // Read per call rather than held, so moving the slider changes the
-        // next sentence rather than the next read.
-        return tts.synthesize(text, loaded, speed, settings.decodeSteps, onAudio)
+        val loaded = voice ?: resolve(VoiceCatalog.DEFAULT_VOICE_ID).also { voice = it }
+        // Read per call rather than held, so moving a slider changes the next
+        // sentence rather than the next read.
+        return tts.synthesize(
+            text,
+            loaded,
+            speed,
+            settings.decodeSteps,
+            settings.temperature,
+            settings.voiceSeed,
+            onAudio,
+        )
     }
 
+    /**
+     * Finds the prompt for [voiceId], falling back to the default voice.
+     *
+     * The fallback is silent by necessity - there is nothing sensible to do
+     * mid-read about a voice that has gone missing - but silent is how "it
+     * used the wrong voice" gets to be a mystery, so it is recorded.
+     */
     private suspend fun resolve(voiceId: String): PocketTts.LoadedVoice {
-        VoiceCatalog.byId(voiceId)?.let { return tts.loadVoice(it) }
+        val manager = ModelManager(context)
+        VoiceCatalog.byId(voiceId)?.let { stock ->
+            VoiceTrace.resolved(
+                caller = "reader",
+                requested = voiceId,
+                resolved = voiceId,
+                promptBytes = manager.voiceFile(voiceId).length(),
+                expectedBytes = stock.bytes,
+            )
+            return tts.loadVoice(stock)
+        }
         // Not a stock voice, so it is one the user imported.
-        val imported = ModelManager(context).voiceFile(voiceId)
-        if (imported.isFile) return tts.loadVoiceFile(voiceId, imported)
-        return tts.loadVoice(VoiceCatalog.default())
+        val imported = manager.voiceFile(voiceId)
+        if (imported.isFile) {
+            VoiceTrace.resolved("reader", voiceId, voiceId, imported.length(), 0)
+            return tts.loadVoiceFile(voiceId, imported)
+        }
+        val fallback = VoiceCatalog.default()
+        VoiceTrace.resolved(
+            caller = "reader",
+            requested = voiceId,
+            resolved = fallback.id,
+            promptBytes = manager.voiceFile(fallback.id).length(),
+            expectedBytes = fallback.bytes,
+        )
+        return tts.loadVoice(fallback)
     }
 
     companion object : SpeechEngine.Factory {
-
-        /**
-         * Not a voice id anyone can select. [PocketTts.LoadedVoice] is keyed by
-         * id for the engine's voice cache, and this one must never land in it -
-         * it is different audio on every chunk.
-         */
-        private const val CONTINUATION_ID = "\u0000continuation"
-
         override suspend fun create(
             context: Context,
             progress: (Float) -> Unit,

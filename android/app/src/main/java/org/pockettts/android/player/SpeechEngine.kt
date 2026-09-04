@@ -24,18 +24,6 @@ interface SpeechEngine {
     suspend fun useVoice(voiceId: String)
 
     /**
-     * Conditions the next synthesis on [audio] instead of the voice's own
-     * prompt; null goes back to the prompt.
-     *
-     * Pocket TTS is prompted with a few seconds of reference audio and samples
-     * a voice in its neighbourhood, so two calls with the same prompt produce
-     * two slightly different speakers - which is what a listener hears as the
-     * voice changing between sentences. Handing back the audio just produced
-     * narrows that to a continuation of the voice already speaking.
-     */
-    fun continueFrom(audio: FloatArray?)
-
-    /**
      * Synthesises [text], handing samples to [onAudio] as they are produced.
      *
      * @return false if [onAudio] asked to stop before the end.

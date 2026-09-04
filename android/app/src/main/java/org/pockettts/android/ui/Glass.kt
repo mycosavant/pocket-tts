@@ -59,10 +59,39 @@ object Glass {
         NONE,
     }
 
+    /**
+     * What the window paints behind everything, as a colour.
+     *
+     * A backdrop view usually has no background of its own and is simply
+     * letting this show through. A capture of that view therefore records its
+     * content on transparency, and a panel blurring it has nothing solid to
+     * work with - see [GlassPanelView.backdropBase].
+     */
+    fun windowBackground(context: Context): Int =
+        MaterialColors.getColor(context, android.R.attr.colorBackground, Color.BLACK)
+
     fun capability(context: Context): Capability = when {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.S -> Capability.NONE
         crossWindowEnabled(context) -> Capability.CROSS_WINDOW
         else -> Capability.IN_APP_ONLY
+    }
+
+    /**
+     * Reports [onChanged] whenever the system turns cross-window blur on or
+     * off, and returns something to undo that with.
+     *
+     * It is not a fixed property of the device. Battery saver takes it away and
+     * gives it back, and so does the developer option; a screen that read it
+     * once at open would go on claiming whichever answer it happened to catch.
+     */
+    fun followCapability(context: Context, onChanged: (Capability) -> Unit): AutoCloseable {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return AutoCloseable {}
+        val manager = context.getSystemService(WindowManager::class.java)
+        val listener = java.util.function.Consumer<Boolean> { onChanged(capability(context)) }
+        return runCatching {
+            manager.addCrossWindowBlurEnabledListener(context.mainExecutor, listener)
+            AutoCloseable { manager.removeCrossWindowBlurEnabledListener(listener) }
+        }.getOrDefault(AutoCloseable {})
     }
 
     private fun crossWindowEnabled(context: Context): Boolean {

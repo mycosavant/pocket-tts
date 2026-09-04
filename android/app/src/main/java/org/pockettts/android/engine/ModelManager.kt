@@ -167,14 +167,29 @@ class ModelManager(private val context: Context) {
         resolveModelOrNull() ?: throw IOException("The model unpacked but its files were not found")
     }
 
-    /** Downloads a voice prompt if it is not already cached, and returns it. */
+    /**
+     * Downloads a voice prompt if it is not already cached, and returns it.
+     *
+     * "Cached" means the file on disk is the prompt this voice ships as, not
+     * merely a file in the right place with the right name. Those came apart:
+     * an import named like a stock voice overwrote that voice's prompt, and
+     * because any non-empty file counted as cached, nothing ever fetched the
+     * real one again. Every "Alba" from that moment on was read in someone
+     * else's voice, silently, on every build since.
+     *
+     * The size is enough to catch it and costs a stat.
+     */
     suspend fun ensureVoice(
         voice: VoiceCatalog.Voice,
         progress: ProgressListener? = null,
     ): File = withContext(Dispatchers.IO) {
         voiceDir.mkdirs()
         val target = File(voiceDir, voice.fileName)
-        if (target.isFile && target.length() > 0) return@withContext target
+        if (isCached(voice, target)) return@withContext target
+        // Not the prompt it claims to be. Deleted rather than resumed: the
+        // download below appends to a `.part`, and appending to someone else's
+        // wav would produce a longer file that is still not this voice.
+        target.delete()
 
         val temp = File(voiceDir, "${voice.fileName}.part")
         try {
@@ -226,6 +241,16 @@ class ModelManager(private val context: Context) {
         return if (imported.isFile) imported else File(voiceDir, "$id.wav")
     }
 
+    /**
+     * Whether [file] is the prompt [voice] ships as.
+     *
+     * A size rather than a hash: the CDN serves an exact content-length, the
+     * files are a megabyte each, and the failure being caught is a wholly
+     * different recording, not a corrupted byte.
+     */
+    fun isCached(voice: VoiceCatalog.Voice, file: File = File(voiceDir, voice.fileName)): Boolean =
+        file.isFile && file.length() == voice.bytes
+
     fun importedVoices(): List<File> {
         migrateImportedVoices()
         return importedDir.listFiles()
@@ -239,9 +264,11 @@ class ModelManager(private val context: Context) {
      *
      * Anything in the voice directory that is not named after a stock voice was
      * an import, and is the user's own. One that *was* named after a stock
-     * voice already overwrote that prompt and cannot be told apart from it any
-     * more; that one is left where it is and will be replaced by a fresh
-     * download.
+     * voice already overwrote that prompt, and is not recoverable as an import
+     * because it cannot be told apart from the prompt it replaced. It is left
+     * where it is, and [ensureVoice] now notices that it is the wrong size and
+     * fetches the real prompt over it - which this comment previously claimed
+     * happened, while nothing in the code did it.
      */
     private fun migrateImportedVoices() {
         val stock = VoiceCatalog.voices.map { it.fileName }.toSet()

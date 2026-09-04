@@ -34,8 +34,7 @@ object Insets {
             // underneath the navigation bar as it passes behind it.
             if (view is android.view.ViewGroup) view.clipToPadding = false
             ViewCompat.setOnApplyWindowInsetsListener(view) { target, windowInsets ->
-                val bars = windowInsets.systemBarInsets()
-                target.updatePadding(bottom = initial + bars.bottom)
+                target.updatePadding(bottom = initial + windowInsets.bottomInset())
                 windowInsets
             }
         }
@@ -50,4 +49,23 @@ object Insets {
             getInsets(WindowInsetsCompat.Type.systemBars()),
             getInsets(WindowInsetsCompat.Type.displayCutout()),
         )
+
+    /**
+     * What sits below the content, keyboard included.
+     *
+     * The keyboard is the reason this is not just the system bars. A window
+     * that is laid out edge to edge is not resized when the keyboard opens -
+     * `adjustResize` stopped meaning that - it is told about it in the insets
+     * and expected to deal with it. Nothing warns you: the layout simply keeps
+     * its full height and the keyboard covers whatever was against the bottom,
+     * which in the scratchpad is the Speak button, and the only way back to it
+     * is to dismiss the keyboard you were typing with.
+     *
+     * The maximum rather than the sum: when the keyboard is open its inset
+     * already includes the navigation bar underneath it.
+     */
+    private fun WindowInsetsCompat.bottomInset(): Int = maxOf(
+        systemBarInsets().bottom,
+        getInsets(WindowInsetsCompat.Type.ime()).bottom,
+    )
 }

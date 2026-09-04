@@ -12,6 +12,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.pockettts.android.debug.Metrics
+import org.pockettts.android.debug.VoiceTrace
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -72,6 +73,8 @@ class PocketTts private constructor(
      * @param numSteps Euler steps per frame when decoding the flow. See
      *   [Settings.decodeSteps]: sherpa-onnx defaults to 5, the reference
      *   implementation to 1.
+     * @param temperature width of the neighbourhood the speaker is drawn from.
+     * @param seed fixes that draw, or -1 to take a fresh one each sentence.
      * @param onAudio receives float samples in [-1, 1]; return false to abandon
      *   the rest of this utterance.
      * @return false if generation was stopped early.
@@ -81,16 +84,24 @@ class PocketTts private constructor(
         voice: LoadedVoice,
         speed: Float,
         numSteps: Int,
+        temperature: Float,
+        seed: Int,
         onAudio: (FloatArray) -> Boolean,
     ): Boolean = synthesisLock.withLock {
         withContext(Dispatchers.Default) {
             var completed = true
-            val config = GenerationConfig(
-                speed = speed,
-                referenceAudio = voice.samples,
-                referenceSampleRate = voice.sampleRate,
-                numSteps = numSteps,
+            // Recorded here rather than at the call site because this is the
+            // last place the prompt is a real array of samples: everything
+            // upstream is an id, and an id is exactly what has been lying.
+            VoiceTrace.generated(
+                voiceId = voice.id,
+                promptSamples = voice.samples.size,
+                promptRate = voice.sampleRate,
+                promptHash = voice.samples.contentHashCode(),
+                temperature = temperature,
+                seed = seed,
             )
+            val config = generationConfig(voice, speed, numSteps, temperature, seed)
             tts.generateWithConfigAndCallback(
                 text,
                 config,
@@ -132,6 +143,41 @@ class PocketTts private constructor(
          *
          * @param onAudio returns true to keep generating, false to stop.
          */
+        /**
+         * The configuration for one generation, as a value a test can read.
+         *
+         * Extracted because the two settings that decide *who* is speaking
+         * travel in the untyped `extra` map, where a typo is not a compile
+         * error and the consequence is silently getting sherpa-onnx's defaults
+         * back - which is exactly the state this app shipped in.
+         *
+         * The keys are read in `offline-tts-pocket-impl.h`:
+         *
+         *   float temperature = gen_config.GetExtraFloat("temperature", 0.7f);
+         *   float stddev = std::sqrt(temperature);
+         *   int32_t seed = gen_config.GetExtraInt("seed", -1);
+         *   NormalDataGenerator normal_gen(0, stddev, seed);
+         *
+         * inside GenerateSingleSentence - per sentence, not per call, which is
+         * why pinning the seed is what steadies a voice across a paragraph.
+         */
+        fun generationConfig(
+            voice: LoadedVoice,
+            speed: Float,
+            numSteps: Int,
+            temperature: Float,
+            seed: Int,
+        ): GenerationConfig = GenerationConfig(
+            speed = speed,
+            referenceAudio = voice.samples,
+            referenceSampleRate = voice.sampleRate,
+            numSteps = numSteps,
+            extra = mapOf(
+                "temperature" to temperature.toString(),
+                "seed" to seed.toString(),
+            ),
+        )
+
         fun audioCallback(onAudio: (FloatArray) -> Boolean): Function1<FloatArray, Int> =
             object : Function1<FloatArray, Int> {
                 // sherpa-onnx reads the result as "1 to keep going, 0 to stop".

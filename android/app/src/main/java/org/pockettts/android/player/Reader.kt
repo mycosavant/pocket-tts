@@ -41,17 +41,6 @@ object Reader {
     private const val TAG = "Reader"
 
     /**
-     * How much of the voice already spoken is handed back as the prompt for
-     * the next sentence.
-     *
-     * Long enough to carry a speaker, short enough to be cheaper to encode
-     * than the ten-second voice prompt it replaces. The number itself is a
-     * guess that only an ear on a real device can settle, which is why the
-     * whole behaviour is a setting.
-     */
-    private const val CONTINUITY_SECONDS = 6f
-
-    /**
      * Who asked for this utterance.
      *
      * The reader is process-wide, so a screen that wants to show its own
@@ -208,13 +197,6 @@ object Reader {
         val chunks: List<TextChunker.Chunk>,
         val engine: SpeechEngine,
         val speed: Float,
-        /**
-         * The last few seconds spoken, so the next chunk can continue the voice
-         * rather than sample a new one. On the utterance rather than on the
-         * play loop so that it survives a skip - skipping should move through
-         * the text, not restart the speaker.
-         */
-        val tail: AudioTail?,
     )
 
     @Volatile
@@ -392,11 +374,6 @@ object Reader {
                 chunks = TextChunker.chunk(speakable),
                 engine = engine,
                 speed = settings.speed,
-                tail = if (settings.steadyVoice) {
-                    AudioTail((CONTINUITY_SECONDS * engine.sampleRate).toInt())
-                } else {
-                    null
-                },
             )
             utterance = prepared
             play(prepared, from = 0, askedAt = askedAt)
@@ -453,12 +430,6 @@ object Reader {
                     interrupted = true
                     break
                 }
-                // Continue the voice that has been speaking, rather than
-                // re-sampling one from the prompt for every sentence. Upstream
-                // names this as the fix for exactly this symptom; there is
-                // nothing to continue from before the first chunk has been
-                // spoken, and nothing at all when the setting is off.
-                current.engine.continueFrom(current.tail?.takeIf { !it.isEmpty }?.snapshot())
                 chunkStartedAt = System.currentTimeMillis()
                 val spoke = current.engine.synthesize(
                     chunk.text,
@@ -469,10 +440,7 @@ object Reader {
                     // rest of it.
                     if (EngineTurn.superseded(current.turn)) return@synthesize false
                     val written = localPlayer.write(samples)
-                    if (written) {
-                        samplesProduced += samples.size
-                        current.tail?.append(samples)
-                    }
+                    if (written) samplesProduced += samples.size
                     if (written && !audible) {
                         audible = true
                         askedAt?.let { Metrics.timeToFirstAudioMillis = System.currentTimeMillis() - it }

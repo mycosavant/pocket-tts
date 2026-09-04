@@ -28,7 +28,7 @@
     <string name="speak_code_blocks">Read code blocks aloud</string>
     <string name="treat_as_markdown">Strip Markdown from selected text</string>
     <string name="steady_voice">Keep one voice across sentences</string>
-    <string name="steady_voice_explained">Each sentence is spoken in the voice of the one before it, rather than drawn afresh from the voice sample. Turn this off if the voice wanders over a long read.</string>
+    <string name="steady_voice_explained">Every sentence draws the same speaker from the voice sample, instead of a new one each time. Turn this off to hear a passage read differently on each attempt.</string>
 
     <string name="scratchpad_hint">Type or paste Markdown here…</string>
     <string name="speak">Speak</string>
@@ -55,6 +55,8 @@
     <string name="composing">Composing the first sentence…</string>
 
     <string name="install_model">Install from a file</string>
+    <string name="temperature">Voice variation: %1$.2f</string>
+    <string name="temperature_explained">How far each sentence\'s speaker may be drawn from the voice sample. Kyutai\'s own default for English is 0.30; this engine ships 0.70.</string>
     <string name="decode_steps">Decode steps: %1$d</string>
     <string name="decode_steps_explained">Passes per audio frame. Kyutai\'s own code uses 1; this engine defaults to 5. Fewer should be faster - listen for whether it is also worse.</string>
     <string name="timings">Timings</string>
@@ -80,7 +82,7 @@
     <string name="preview_backdrop_body">This text is blurred by the same code the real overlay uses, so what you dial in here is what ships.</string>
     <string name="preview_panel_body">Panel sample text</string>
     <string name="capability_cross_window">Cross-window blur: supported. Panels over other apps will frost them.</string>
-    <string name="capability_in_app_only">Cross-window blur: unsupported on this device — Samsung does not enable it on One UI. In-app blur (RenderEffect) works, so the scratchpad overlay frosts properly; a panel over another app gets an opaque surface instead, because no app may read another app\'s pixels.</string>
+    <string name="capability_in_app_only">Cross-window blur: the system reports it unavailable right now. In-app blur works, so the scratchpad overlay frosts; a panel over another app gets an opaque surface instead, because no app may read another app\'s pixels. Accessibility → “Reduce transparency and blur” turns this off system-wide, and so does battery saver; some devices never had it. This line follows the system, so toggling that setting changes it here without leaving the screen.</string>
     <string name="capability_none">Blur needs Android 12 or newer. Panels use a solid surface.</string>
 
     <!-- What the live preview panel actually did on its last frame. -->

@@ -307,32 +307,79 @@ anything reads as evidence and is not.
 
 ## The voice, and why it kept changing
 
-The voice used to change between sentences. That is not the arbitration and it
-is not a bug in this app: it is how the model is being asked for audio.
+The voice used to change from sentence to sentence, and sometimes was not the
+voice that had been selected at all. Three separate faults, all of which sound
+identical from the outside.
 
-Pocket TTS is prompted with a few seconds of reference audio and samples a
-speaker in its neighbourhood, so the same prompt asked twice gives two slightly
-different people. A read is one call per sentence. Every sentence therefore
-draws a new speaker from the same sample, and what you hear is the drawing.
+**The speaker is drawn, and the draw was uncontrolled.** Pocket TTS has no
+speaker table. It is prompted with a few seconds of reference audio and samples
+a speaker in that audio's neighbourhood; the draw is a vector of Gaussian noise.
+In `offline-tts-pocket-impl.h`:
 
-Upstream names the fix, as a TODO in `tts_model.py` immediately above the loop
-that splits long text into chunks: use the audio of one chunk as conditioning
-for the next. `player/AudioTail` keeps the last six seconds actually produced
-and the reader hands them back as the prompt for the next sentence, so each one
-continues the voice already speaking. The buffer lives on the utterance rather
-than the play loop, so a skip moves through the text without restarting the
-speaker.
+```cpp
+float temperature = gen_config.GetExtraFloat("temperature", 0.7f);
+float stddev = std::sqrt(temperature);
+int32_t seed = gen_config.GetExtraInt("seed", -1);
+NormalDataGenerator normal_gen(0, stddev, seed);
+```
 
-It is a setting, defaulting on, because the trade is real and cannot be judged
-from source: conditioning on generated audio can also let the voice wander over
-a long read, and which is worse is a question for an ear.
+That sits inside `GenerateSingleSentence`, which sherpa-onnx calls once per
+sentence after re-splitting whatever text it is handed on `.!?`. Per *sentence*,
+not per call. A seed of -1 means a fresh draw from a random device every time,
+so a paragraph is read by a succession of slightly different people.
 
-One cost is unmeasured. `OfflineTtsPocketModelConfig.voiceEmbeddingCacheCapacity`
-defaults to 50, so sherpa-onnx caches encoded voice prompts; a fixed prompt is
-encoded once and a rolling one plausibly is not. Six seconds is less audio than
-the ten a stock voice prompt is trimmed to, so the ceiling on that cost is one
-encode of a shorter prompt per sentence - but "plausibly" is doing work in that
-sentence, and time-to-first-audio on a device is what settles it.
+Both knobs travel in `GenerationConfig.extra`, an untyped string map. This app
+passed nothing, so it got sherpa-onnx's defaults. It now sends both:
+
+- **A fixed seed**, when "Keep one voice across sentences" is on, so every
+  sentence draws the same speaker. It is the whole of that feature. An earlier
+  attempt kept the last six seconds of generated audio and fed it back as the
+  next sentence's prompt - which could not work, because it acted at chunk
+  boundaries while the re-draws happen per sentence *inside* a chunk, and
+  because replacing the prompt with generated audio abandons the selected voice
+  entirely and never returns to it. That code is gone.
+- **Temperature 0.3** rather than sherpa-onnx's 0.7. Kyutai moved English to 0.3
+  in this repository (`d108410`): "Human evaluations consistently prefer the
+  English model at temperature 0.3 over the current default 0.7, and the change
+  is free on every objective axis we measured." Their default is recorded
+  against `english.yaml` and `english_2026-04.yaml`, while the bundle this app
+  downloads is `english_2026-01` - a strong prior rather than a measured value
+  for this snapshot, hence a slider.
+
+**A stock prompt could be somebody else.** An import named like a stock voice
+overwrote that voice's wav, and `ensureVoice` treated any non-empty file at the
+right path as cached - so nothing ever fetched the real one again. Every "Alba"
+from that moment on was read in a different person's voice, silently, on every
+build. `VoiceCatalog` now carries each prompt's exact size and a mismatch is not
+cached. (The comment claiming these "will be replaced by a fresh download" had
+been there the whole time. Nothing did it.)
+
+**The system engine served a voice chosen weeks ago.** Android resolves an
+engine's default voice name once per client and then sends that name back on
+every subsequent request. Returning a concrete voice id from
+`onGetDefaultVoiceNameFor` therefore pinned whichever voice was selected when
+Select to Speak or Chrome first bound, and changing the voice here did nothing
+for them until they were force-stopped. The engine now advertises one alias
+voice, `selected`, resolved on each request.
+
+## Who is actually speaking
+
+`debug/VoiceTrace` records, per read: the voice asked for, the voice found,
+whether that was a fallback, the prompt file's size against the size that voice
+ships as, and then per chunk the prompt's length and content hash with the
+temperature and seed in force.
+
+```
+[reader] asked for alba, got alba (958542 bytes as expected)
+[chunk 0] alba prompt=9.98s hash=6f3a1c2e temp=0.30 seed=1
+```
+
+It exists because the faults above are mutually indistinguishable by ear and the
+phone this runs on has no logcat within reach. Each line separates them: a
+fallback names itself, a prompt that is not the one it claims to be shows a size
+that does not match, a client sending a stale id shows a `requested` that is not
+the selection, and a voice wandering with all of that correct is the draw. It
+shares a screen with Timings, by the same reasoning as the exit report.
 
 ## Steps per frame, and a factor of five
 
@@ -409,12 +456,21 @@ Blurring depends entirely on what is behind the panel, and the two cases have
 different answers.
 
 Behind **another app**, only `Window.setBackgroundBlurRadius` can blur, because
-an app may not read another app's pixels. That API is gated on a vendor opt-in
-(`ro.surface_flinger.supports_background_blur`) and Samsung does not set it -
-their [developer forum](https://forum.developer.samsung.com/t/why-does-oneui-not-support-crosswindowblur/34386)
-confirms cross-window blur is unsupported across One UI. So on most devices
-there is nothing behind that panel to frost, and no value of any setting will
-produce one.
+an app may not read another app's pixels. Whether that works is not something to
+reason about: `WindowManager.isCrossWindowBlurEnabled` answers it. On the device
+this was built for it says no, and no value of any slider will produce a frost.
+
+What it does not say is *why*, and this app no longer guesses. Accessibility →
+"Reduce transparency and blur" turns it off system-wide, battery saver takes it
+away too, and some devices never had it. The frosted panels the system draws for
+*itself* - Samsung's quick settings and app-drawer folders, which are lovely -
+are composited by a privileged process and settle none of it.
+
+Most of those causes come and go, so the capability is followed with
+`addCrossWindowBlurEnabledListener` rather than read once when the screen opens.
+That also makes the appearance screen the test: toggle the accessibility setting
+and the line changes under you, which answers the question without anyone having
+to be right about it in advance.
 
 The read-aloud sheet used to pretend otherwise. It drew a near-transparent
 surface, found it could not blur, and painted a hard 0.94 instead - silently
@@ -446,10 +502,43 @@ nothing, because for three of the four that was exactly true. Both views are now
 located against the root they share and the difference is taken, which is
 correct for siblings, cousins and ancestors alike.
 
-Because that failure has no visual signature - a panel that quietly gave up
+The capture also has to start opaque, which is the second way this looked
+broken. A backdrop view usually has no background of its own - it is letting the
+window's background show through - so recording it captures its text on
+transparency. Blur that, composite it, and the blurred copy lands *on top of*
+the original, which is still there and still sharp underneath. Only the dim and
+the tint appeared to do anything, and the panel read exactly like one whose blur
+was not working.
+
+That is why the appearance preview frosted convincingly while the real
+scratchpad overlay did not: the preview's backdrop has a background and a row of
+colour swatches, and the editor behind the overlay has neither. The panel now
+fills the capture with the window background before drawing the backdrop into
+it, so the blur has something solid to work on and the result covers what is
+underneath instead of ghosting over it. Nothing about the backdrop's own layout
+is required any more.
+
+Because these failures have no visual signature - a panel that quietly gave up
 looks like settings that were never wired - every frame records *why* it drew
 what it drew in `lastDraw`, and the appearance screen prints it. A log line is
-no use on a phone with no logcat within reach.
+no use on a phone with no logcat within reach. It is worth saying that
+`lastDraw` did *not* catch either of the two faults above: both reported
+`BLURRED`, because the capture genuinely ran. It answers "did the blur path
+execute", which is a narrower question than "did anything blur".
+
+## The keyboard is not the window's problem any more
+
+The scratchpad's Speak and Stop buttons sat under the keyboard. `adjustResize`
+is in the manifest and does nothing: a window laid out edge to edge - which
+`targetSdk 35` makes every window - is no longer resized when the keyboard
+opens. It is handed the keyboard's size in the insets and expected to deal with
+it. Nothing warns you, and the symptom is that reaching the control means
+dismissing the keyboard you were typing with.
+
+`ui/Insets` now pays back the maximum of the system bars and the IME, rather
+than the system bars alone. The maximum and not the sum: the keyboard is drawn
+over the navigation bar, so its inset already contains it, and adding them
+leaves a gap exactly one navigation bar tall.
 
 This is the technique [Haze](https://chrisbanes.github.io/haze/) uses on
 Android. Haze is Compose Multiplatform and this app is Views, so the technique

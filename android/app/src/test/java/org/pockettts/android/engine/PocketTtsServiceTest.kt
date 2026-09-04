@@ -8,6 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import androidx.test.core.app.ApplicationProvider
 import org.pockettts.android.speech.TextChunker
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
@@ -158,4 +159,29 @@ class PocketTtsServiceTest {
         }
     }
 
+
+    @Test
+    fun `the default voice name is resolved on each request, not at bind time`() {
+        // Android asks an engine for its default voice name once per client and
+        // then sends that name back on every request for as long as the client
+        // lives. Returning a concrete voice id here pinned whichever voice was
+        // selected when Select to Speak or Chrome first bound: changing the
+        // voice in this app did nothing for them until they were force-stopped.
+        val settings = Settings(ApplicationProvider.getApplicationContext())
+        settings.voiceId = "jane"
+        val name = service.onGetDefaultVoiceNameFor("eng", "GBR", "")
+
+        settings.voiceId = "paul"
+
+        assertEquals(
+            "the default voice name is a snapshot of the selection",
+            name,
+            service.onGetDefaultVoiceNameFor("eng", "GBR", ""),
+        )
+        assertEquals(TextToSpeech.SUCCESS, service.onIsValidVoiceName(name))
+        assertTrue(
+            "the name a client caches is one of the voices offered",
+            service.onGetVoices().any { it.name == name },
+        )
+    }
 }
