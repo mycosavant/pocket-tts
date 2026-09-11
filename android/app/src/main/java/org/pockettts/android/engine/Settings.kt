@@ -84,17 +84,18 @@ class Settings(context: Context) {
      * from the same prompt, so pitch, pace and energy reset at every full stop.
      * On a paragraph that is audible as a voice that keeps resettling.
      *
-     * With this on, the reference for each sentence is the voice prompt plus
-     * the last couple of seconds actually spoken - see [VoiceContinuity]. The
+     * With this on, the reference for each chunk is the voice prompt plus the
+     * last couple of seconds actually spoken - see [VoiceContinuity]. The
      * prompt never leaves it, so identity cannot drift the way it did when this
      * was last attempted.
      *
-     * Off by default, and deliberately: it makes the model re-encode a
-     * reference once per sentence rather than once per chunk, and if that
-     * pushes generation below real time the reading gains gaps, which is a
-     * worse fault than the one it fixes. The Timings screen reports generation
-     * speed, so this is a question the device can answer - turn it on, read a
-     * few paragraphs, and compare.
+     * It closes the seams between chunks and not the ones between sentences
+     * inside a chunk. Doing the latter needs the text split before sherpa-onnx
+     * sees it, and measured on a device that cost a third of the generation
+     * speed for nothing sherpa was not going to re-split anyway. This costs
+     * nothing measurable, so it is worth having on its own terms.
+     *
+     * Off by default until it has been listened to rather than reasoned about.
      */
     var continueVoiceAcrossSentences: Boolean
         get() = prefs.getBoolean(KEY_VOICE_CONTINUITY, false)

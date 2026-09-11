@@ -13,7 +13,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.pockettts.android.debug.Metrics
 import org.pockettts.android.debug.VoiceTrace
-import org.pockettts.android.speech.TextChunker
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -92,47 +91,59 @@ class PocketTts private constructor(
     ): Boolean = synthesisLock.withLock {
         withContext(Dispatchers.Default) {
             var completed = true
-            // With no continuity this is one call for the whole text and
-            // sherpa-onnx splits it itself, exactly as before. With continuity
-            // the split has to happen here instead: the reference changes
-            // between sentences, and a reference is chosen once per call.
-            val pieces = if (continuity == null) listOf(text) else TextChunker.sentences(text)
-            for (piece in pieces) {
-                val reference = continuity?.reference() ?: voice.samples
-                // Recorded here rather than at the call site because this is
-                // the last place the prompt is a real array of samples:
-                // everything upstream is an id, and an id is exactly what has
-                // been lying. The hash moves per sentence when the voice is
-                // being carried, which is the only outward sign that it is.
-                VoiceTrace.generated(
-                    voiceId = voice.id,
-                    promptSamples = reference.size,
-                    promptRate = voice.sampleRate,
-                    promptHash = reference.contentHashCode(),
-                    temperature = temperature,
-                    seed = seed,
-                )
-                val config = generationConfig(
-                    reference,
-                    voice.sampleRate,
-                    speed,
-                    numSteps,
-                    temperature,
-                    seed,
-                )
-                tts.generateWithConfigAndCallback(
-                    piece,
-                    config,
-                    audioCallback { samples ->
-                        continuity?.record(samples)
-                        if (onAudio(samples)) true else {
-                            completed = false
-                            false
-                        }
-                    },
-                )
-                if (!completed) break
-            }
+            // One call for the whole text, always, and sherpa-onnx does its own
+            // splitting - which means the reference changes once per chunk
+            // rather than once per sentence.
+            //
+            // This was per sentence, and the device said no twice over.
+            // Generation fell from 1.12x real time to 0.73x, which is below
+            // playback and makes gaps arithmetic rather than bad luck: the
+            // reference is re-encoded per generation call, and a chunk is two
+            // or three sentences, so splitting first paid that cost two or
+            // three times over. And it could not even deliver what it cost.
+            // sherpa-onnx re-splits whatever it is handed, so pre-splitting
+            // does not decide what a sentence is, it only decides how often
+            // the reference is encoded - "Pray for those who hurt you. . . ."
+            // still reached the model as a request to speak three bare full
+            // stops however carefully this side cut it up.
+            //
+            // So the reference is chosen per call and the voice is carried
+            // across chunk boundaries only. Fewer seams closed, at no cost at
+            // all: the reference is the same ten seconds either way, so this
+            // encodes exactly as much as reading with the switch off.
+            val reference = continuity?.reference() ?: voice.samples
+            // Recorded here rather than at the call site because this is the
+            // last place the prompt is a real array of samples: everything
+            // upstream is an id, and an id is exactly what has been lying. The
+            // hash moves from one chunk to the next when the voice is being
+            // carried, which is the only outward sign that it is.
+            VoiceTrace.generated(
+                voiceId = voice.id,
+                promptSamples = reference.size,
+                promptRate = voice.sampleRate,
+                promptHash = reference.contentHashCode(),
+                temperature = temperature,
+                seed = seed,
+            )
+            val config = generationConfig(
+                reference,
+                voice.sampleRate,
+                speed,
+                numSteps,
+                temperature,
+                seed,
+            )
+            tts.generateWithConfigAndCallback(
+                text,
+                config,
+                audioCallback { samples ->
+                    continuity?.record(samples)
+                    if (onAudio(samples)) true else {
+                        completed = false
+                        false
+                    }
+                },
+            )
             completed
         }
     }

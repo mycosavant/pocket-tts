@@ -14,10 +14,20 @@ import androidx.annotation.VisibleForTesting
  * so timbre holds while pitch, pace and energy reset at every full stop. That
  * residue is what "the voice still wanders on long text" now is.
  *
- * The fix is the standard one for chunked neural TTS: condition each sentence
- * on what was just spoken. The important word is *each* - an earlier attempt
- * did this at chunk boundaries, and a chunk is two or three sentences, so it
- * skipped most of the seams it was meant to close.
+ * The fix is the standard one for chunked neural TTS: condition what is about
+ * to be generated on what was just spoken. This carries the voice across chunk
+ * boundaries, which closes the seams between chunks and not the ones between
+ * sentences inside a chunk.
+ *
+ * That is a deliberate retreat, and the device decided it. Doing it per
+ * sentence means splitting before sherpa-onnx sees the text, and the reference
+ * is re-encoded once per generation call - so a chunk of two or three sentences
+ * paid that cost two or three times, and generation fell from 1.12x real time
+ * to 0.73x, which is below playback. It did not even buy what it cost:
+ * sherpa-onnx re-splits whatever it is handed, so splitting first never
+ * decided what a sentence was, only how often the reference was encoded.
+ * Conditioning per chunk costs nothing at all by comparison - the reference is
+ * the same ten seconds either way.
  *
  * ### Why the prompt never leaves
  *
