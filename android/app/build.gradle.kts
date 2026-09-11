@@ -21,6 +21,37 @@ android {
         }
     }
 
+    // The debug key is committed, and this is the one decision here that looks
+    // wrong until you have been bitten by the alternative.
+    //
+    // Left to itself the Android plugin signs debug builds with
+    // ~/.android/debug.keystore, generating one if it is missing. A CI runner
+    // is a fresh machine every time, so every run generated a *new* key pair
+    // and every APK this project has ever published was signed by a different
+    // identity. Android identifies an app by its signature, so the consequences
+    // were permanent rather than occasional: no build could ever be installed
+    // over another - INSTALL_FAILED_UPDATE_INCOMPATIBLE, every time - and
+    // keeping app data on uninstall, which hasFragileUserData exists to offer,
+    // made the *next* install fail outright, because retained data remembers
+    // the identity that wrote it. The way through was to uninstall and discard
+    // the data, which costs a 98 MB model download on every single sideload.
+    // That is the tax this removes.
+    //
+    // What committing it gives away: anyone with this repository can build an
+    // APK that installs over yours. That matters for an app shipped through a
+    // store and it is why a release key is never committed. This key is not
+    // that - it signs a debug key'd build of an app distributed by handing
+    // someone a file - and the same trade is already made by the platform's
+    // own debug key, which is public and identical on every machine.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true

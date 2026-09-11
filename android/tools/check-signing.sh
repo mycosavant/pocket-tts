@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+#
+# Fails if a built APK is not signed by this repository's committed debug key.
+#
+# Android identifies an app by its signing certificate, so a build signed by a
+# different key cannot be installed over the previous one and cannot open data
+# the previous one kept. Before app/debug.keystore was committed, the Android
+# plugin generated a fresh key on whatever machine happened to be building -
+# and a CI runner is a fresh machine every time. Every published APK therefore
+# had a different identity, every sideload was an uninstall, and every
+# uninstall threw away a 98 MB model.
+#
+# That is invisible in source: the build file said "sign with the debug config"
+# both before and after, and nothing about the failure appears until a phone
+# refuses the install. So this reads the artefact, the way the JNI check does.
+#
+# If this fails after a deliberate key change, update EXPECTED below - and know
+# that everyone with the old build installed has to uninstall to take the new
+# one.
+#
+#   tools/check-signing.sh app/build/outputs/apk/release/app-release.apk
+#
+set -euo pipefail
+
+apk="${1:?usage: check-signing.sh <apk>}"
+[ -f "$apk" ] || { echo "no such APK: $apk" >&2; exit 2; }
+
+# SHA-256 of the certificate in app/debug.keystore, lower case and unseparated,
+# which is how apksigner prints it. keytool -list prints the same bytes as
+# colon-separated upper case.
+EXPECTED="f78633b83722e0e89104fcdb745413d1442a7b65a313cd5f6afacaab6204fc9c"
+
+sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/android-sdk}}"
+apksigner="$(ls -1 "$sdk"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)"
+[ -x "${apksigner:-}" ] || { echo "apksigner not found under $sdk/build-tools" >&2; exit 2; }
+
+# --print-certs verifies as well as prints, so a corrupt or unsigned APK fails
+# here rather than reaching the comparison with an empty digest.
+certs="$("$apksigner" verify --print-certs "$apk")"
+actual="$(printf '%s\n' "$certs" | sed -n 's/^Signer #1 certificate SHA-256 digest: *//p' | tr 'A-Z' 'a-z')"
+
+if [ -z "$actual" ]; then
+    echo "FAIL: $(basename "$apk") reports no signer certificate" >&2
+    printf '%s\n' "$certs" >&2
+    exit 1
+fi
+
+if [ "$actual" != "$EXPECTED" ]; then
+    echo "FAIL: $(basename "$apk") is signed by an unexpected key" >&2
+    echo "      expected $EXPECTED" >&2
+    echo "      actual   $actual" >&2
+    echo "      This build cannot be installed over any other, and a phone that" >&2
+    echo "      kept its app data will refuse it outright. Check that" >&2
+    echo "      app/debug.keystore is present and that signingConfigs points at it." >&2
+    exit 1
+fi
+
+echo "OK: $(basename "$apk") is signed by the committed debug key ($actual)"

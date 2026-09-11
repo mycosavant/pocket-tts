@@ -82,6 +82,38 @@ all of it the ONNX Runtime and sherpa-onnx native libraries for `arm64-v8a` and
 `armeabi-v7a`. Dropping `armeabi-v7a` from `abiFilters` in `app/build.gradle.kts`
 roughly halves that if you only care about 64-bit devices.
 
+## The debug key is committed, on purpose
+
+`app/debug.keystore` is in the repository, and both build types are signed with
+it. That is the opposite of the usual advice, and the usual advice is about a
+key that ships an app to a store. This one is not that.
+
+Left alone, the Android plugin signs debug builds with `~/.android/debug.keystore`
+and generates one if it is missing. A CI runner has no home directory worth the
+name, so every run generated a fresh key pair, and every APK this project ever
+published was a different app as far as Android is concerned - identity is the
+signing certificate, not the package name. The consequences were permanent
+rather than intermittent:
+
+- no build could be installed over another, ever: `INSTALL_FAILED_UPDATE_INCOMPATIBLE`,
+- keeping app data on uninstall - which `hasFragileUserData` exists to offer, and
+  which is the only thing standing between an uninstall and a lost voice clone -
+  made the *next* install fail outright, because retained data remembers the
+  identity that wrote it,
+- so the way through was always uninstall-and-discard, which costs a 98 MB model
+  download on every single sideload.
+
+None of that is visible in the build file, which said "sign with the debug
+config" before and after. It is a property of the artefact, so
+`tools/check-signing.sh` reads the artefact: it pins the certificate's SHA-256
+and CI runs it against both APKs. Change the key deliberately and that constant
+has to change with it - and everyone holding the old build has to uninstall to
+take the new one, which is exactly the cost worth being reminded of.
+
+What committing it gives away is real but small: anyone with this repository can
+build an APK that installs over yours. The platform's own debug key is public
+and identical on every machine for the same reason.
+
 ## One install, however many things ask for it
 
 Two callers reached the downloader independently - the button on the main
