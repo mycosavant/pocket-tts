@@ -207,11 +207,20 @@ class PocketTtsService : TextToSpeechService() {
                 // carries its own voice from sentence to sentence and nothing
                 // survives into whatever asks next. This path had no continuity
                 // of any kind, and it is the one most days are spent in.
-                val carried = if (settings.continueVoiceAcrossSentences) {
+                val carried = if (settings.carryVoiceBetweenChunks) {
                     VoiceContinuity(voice, engine.sampleRate)
                 } else {
                     null
                 }
+                // Announced here as well as in the reader. Without it a read
+                // through Select to Speak left no line saying whether the voice
+                // was being carried, which is the exact silence this line was
+                // added to end - and this is the path most days are spent in.
+                VoiceTrace.continuity(
+                    carrying = carried?.usable == true,
+                    promptRate = voice.sampleRate,
+                    outputRate = engine.sampleRate,
+                )
 
                 for (chunk in TextChunker.chunk(speakable)) {
                     if (stopRequested.get() || EngineTurn.superseded(turn)) break

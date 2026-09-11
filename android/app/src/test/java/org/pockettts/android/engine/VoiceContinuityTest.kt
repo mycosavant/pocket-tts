@@ -61,10 +61,37 @@ class VoiceContinuityTest {
         repeat(20) { continuity.record(FloatArray(rate) { -1f }) }
 
         val cap = (VoiceContinuity.MAX_REFERENCE_SECONDS * rate).toInt()
-        assertTrue(
-            "reference grew past the cap: ${continuity.reference().size} > $cap",
-            continuity.reference().size <= cap,
+        val tail = (VoiceContinuity.TAIL_SECONDS * rate).toInt()
+        val reference = continuity.reference()
+        assertTrue("reference grew past the cap: ${reference.size} > $cap", reference.size <= cap)
+        assertEquals("the head is not the cap minus the tail", cap, reference.size)
+        assertEquals(
+            "the prompt does not fill everything the tail left",
+            0.5f,
+            reference[cap - tail - 1],
+            0f,
         )
+    }
+
+    @Test
+    fun `the prompt survives a tail longer than the cap allows`() {
+        // Unreachable while the tail is two seconds and the cap is ten. The
+        // invariant is that the prompt is always in the reference, and the
+        // previous attempt at this failed by breaking it - so it should not
+        // rest on two constants staying in the right order.
+        val prompt = voice(seconds = 4f)
+        val continuity = VoiceContinuity(
+            prompt,
+            rate,
+            tailSeconds = 30f,
+            maxSeconds = VoiceContinuity.MAX_REFERENCE_SECONDS,
+        )
+
+        repeat(40) { continuity.record(FloatArray(rate) { -1f }) }
+
+        val reference = continuity.reference()
+        assertEquals("the prompt was squeezed out entirely", 0.5f, reference.first(), 0f)
+        assertEquals("the recent audio is not at the tail", -1f, reference.last(), 0f)
     }
 
     @Test
@@ -94,12 +121,26 @@ class VoiceContinuityTest {
         assertTrue("nothing was carried", continuity.hasContext)
 
         val reference = continuity.reference()
-        assertTrue(
-            "the reference is no longer than the prompt, so nothing was added",
-            reference.size > 0,
+        // The split point, pinned. One second was recorded at the model's
+        // 24 kHz, so resampled to the prompt's 48 kHz it must be one second
+        // there too - twice the samples. The prompt is four seconds, which
+        // fits under the cap whole, so the reference is exactly the two laid
+        // end to end. Checking only the first and last sample would pass on a
+        // reference that was almost entirely one or the other.
+        val carried = 48_000
+        assertEquals(
+            "the tail is not one second at the prompt's rate",
+            prompt.samples.size + carried,
+            reference.size,
         )
         assertEquals("the prompt is not at the head", 0.5f, reference.first(), 0f)
         assertEquals("the recent audio is not at the tail", -1f, reference.last(), 0.01f)
+        assertEquals(
+            "the prompt does not run right up to the carried audio",
+            0.5f,
+            reference[prompt.samples.size - 1],
+            0f,
+        )
     }
 
     @Test

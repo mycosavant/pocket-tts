@@ -56,9 +56,12 @@ class PocketTtsEngine(
         val loaded = voice ?: resolve(VoiceCatalog.DEFAULT_VOICE_ID).also { voice = it }
         // Read per call rather than held, so moving a slider changes the next
         // sentence rather than the next read. The continuity is the exception:
-        // it is the read's own accumulated context, so turning the setting off
-        // mid-read stops adding to it rather than discarding what is there.
-        val carried = if (settings.continueVoiceAcrossSentences) {
+        // it is the read's own accumulated context, and it is kept rather than
+        // discarded when the setting goes off mid-read - so turning it back on
+        // conditions the next chunk on audio from before the gap. Harmless at
+        // this scale, and cheaper than deciding what "off" should mean to
+        // something that has already been accumulated.
+        val carried = if (settings.carryVoiceBetweenChunks) {
             continuity ?: VoiceContinuity(loaded, tts.sampleRate).also { continuity = it }
         } else {
             null

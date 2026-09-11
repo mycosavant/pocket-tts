@@ -76,7 +76,7 @@ class Settings(context: Context) {
         set(value) = prefs.edit { putBoolean(KEY_STEADY_VOICE, value) }
 
     /**
-     * Whether each sentence is conditioned on the end of the one before it.
+     * Whether each chunk is conditioned on the end of the one before it.
      *
      * The fixed seed above makes every sentence draw the *same speaker*. It
      * cannot make them sound like one continuous delivery, because nothing
@@ -97,7 +97,7 @@ class Settings(context: Context) {
      *
      * Off by default until it has been listened to rather than reasoned about.
      */
-    var continueVoiceAcrossSentences: Boolean
+    var carryVoiceBetweenChunks: Boolean
         get() = prefs.getBoolean(KEY_VOICE_CONTINUITY, false)
         set(value) = prefs.edit { putBoolean(KEY_VOICE_CONTINUITY, value) }
 

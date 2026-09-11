@@ -29,8 +29,8 @@
     <string name="treat_as_markdown">Strip Markdown from selected text</string>
     <string name="steady_voice">Keep one voice across sentences</string>
     <string name="steady_voice_explained">Every sentence draws the same speaker from the voice sample, instead of a new one each time. Turn this off to hear a passage read differently on each attempt.</string>
-    <string name="voice_continuity">Carry the voice between sentences</string>
-    <string name="voice_continuity_explained">Each sentence is generated from the voice sample plus the end of the sentence before it, so pace and pitch carry instead of resetting at every full stop. Costs some speed: check that generation stays above 1.0x real time on the Timings screen.</string>
+    <string name="voice_continuity">Carry the voice between passages</string>
+    <string name="voice_continuity_explained">Each passage of a few sentences is generated from the voice sample plus the end of the passage before it, so pace and pitch carry across the join instead of resetting. Not between every sentence: the engine generates those itself. Costs some speed, and the Timings screen shows it - watch the first= figure on each chunk line, and the underrun count on a long read.</string>
 
     <string name="scratchpad_hint">Type or paste Markdown here…</string>
     <string name="speak">Speak</string>

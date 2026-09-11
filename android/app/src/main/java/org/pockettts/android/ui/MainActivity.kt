@@ -104,7 +104,7 @@ class MainActivity : AppCompatActivity() {
             settings.steadyVoice = checked
         }
         binding.voiceContinuitySwitch.setOnCheckedChangeListener { _, checked ->
-            settings.continueVoiceAcrossSentences = checked
+            settings.carryVoiceBetweenChunks = checked
         }
 
         requestNotificationPermission()
@@ -206,7 +206,7 @@ class MainActivity : AppCompatActivity() {
         binding.markdownSwitch.isChecked = settings.treatSelectionAsMarkdown
         binding.codeBlocksSwitch.isChecked = settings.speakCodeBlocks
         binding.steadyVoiceSwitch.isChecked = settings.steadyVoice
-        binding.voiceContinuitySwitch.isChecked = settings.continueVoiceAcrossSentences
+        binding.voiceContinuitySwitch.isChecked = settings.carryVoiceBetweenChunks
 
         val installed = ModelManager(this).isModelInstalled
         binding.modelStatus.setText(if (installed) R.string.model_ready else R.string.model_missing)

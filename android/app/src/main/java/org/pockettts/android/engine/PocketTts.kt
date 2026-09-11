@@ -112,19 +112,6 @@ class PocketTts private constructor(
             // all: the reference is the same ten seconds either way, so this
             // encodes exactly as much as reading with the switch off.
             val reference = continuity?.reference() ?: voice.samples
-            // Recorded here rather than at the call site because this is the
-            // last place the prompt is a real array of samples: everything
-            // upstream is an id, and an id is exactly what has been lying. The
-            // hash moves from one chunk to the next when the voice is being
-            // carried, which is the only outward sign that it is.
-            VoiceTrace.generated(
-                voiceId = voice.id,
-                promptSamples = reference.size,
-                promptRate = voice.sampleRate,
-                promptHash = reference.contentHashCode(),
-                temperature = temperature,
-                seed = seed,
-            )
             val config = generationConfig(
                 reference,
                 voice.sampleRate,
@@ -133,17 +120,46 @@ class PocketTts private constructor(
                 temperature,
                 seed,
             )
-            tts.generateWithConfigAndCallback(
-                text,
-                config,
-                audioCallback { samples ->
-                    continuity?.record(samples)
-                    if (onAudio(samples)) true else {
-                        completed = false
-                        false
-                    }
-                },
-            )
+            // Timed from the call to the first sample out of it. That interval
+            // is the voice embedding being encoded plus the model's first pass,
+            // and it is the only place the cost of a moving reference is
+            // visible: sherpa-onnx caches the embedding against a hash of the
+            // reference samples, so a prompt that never changes is encoded once
+            // per process and one that moves every chunk is a miss every chunk.
+            val startedAt = System.currentTimeMillis()
+            var firstSampleMillis = -1L
+            try {
+                tts.generateWithConfigAndCallback(
+                    text,
+                    config,
+                    audioCallback { samples ->
+                        if (firstSampleMillis < 0) {
+                            firstSampleMillis = System.currentTimeMillis() - startedAt
+                        }
+                        continuity?.record(samples)
+                        if (onAudio(samples)) true else {
+                            completed = false
+                            false
+                        }
+                    },
+                )
+            } finally {
+                // Recorded here rather than at the call site because this is
+                // the last place the prompt is a real array of samples:
+                // everything upstream is an id, and an id is exactly what has
+                // been lying. After the generation rather than before it, so
+                // the line can carry what it cost; a finally so a generation
+                // that throws still leaves its breadcrumb.
+                VoiceTrace.generated(
+                    voiceId = voice.id,
+                    promptSamples = reference.size,
+                    promptRate = voice.sampleRate,
+                    promptHash = reference.contentHashCode(),
+                    temperature = temperature,
+                    seed = seed,
+                    firstSampleMillis = firstSampleMillis,
+                )
+            }
             completed
         }
     }

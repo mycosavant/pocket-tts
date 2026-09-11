@@ -468,8 +468,23 @@ over:
 
 So the reference is chosen once per chunk. That closes the seams between chunks
 and leaves the ones between sentences inside a chunk, which is less than was
-hoped for - and it costs nothing at all, because the reference is the same ten
-seconds either way.
+hoped for.
+
+**It is not free, and the reason is worth knowing.** sherpa-onnx caches the
+encoded voice embedding in a 50-entry LRU keyed by a hash of the reference
+samples, and skips the Mimi encoder on a hit. With this off the prompt is
+byte-identical on every call, so the encoder runs once per process per voice.
+With it on, every chunk after the first is a different array - the same ten
+seconds, never the same bytes - so it is a cache miss and a full encode, once
+per chunk. "The same length either way" is exactly what makes it *not* free.
+
+`Metrics.generationRealTimeFactor` cannot see that: it is measured on the first
+chunk of a read, and the first chunk has no context yet in either mode, so its
+reference is the plain prompt and always a cache hit. That is why each
+`[chunk n]` trace line now carries `first=NNNms` - wall clock from asking for
+the chunk to its first sample, which is the encode plus the model's first pass.
+With the switch on that figure should jump by one encode on every chunk after
+the first, and how big that jump is decides whether this is worth having.
 
 The two halves are concatenated into one array under one declared sample rate,
 so a prompt recorded at a rate the model does not generate at would play one

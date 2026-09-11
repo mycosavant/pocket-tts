@@ -91,9 +91,21 @@ class VoiceContinuity(
      */
     fun reference(): FloatArray {
         if (!hasContext) return voice.samples
-        val recent = resample(tail.snapshot(), from = outputRate, to = voice.sampleRate)
-        val room = (maxSeconds * voice.sampleRate).toInt() - recent.size
-        if (room <= 0) return recent
+        val cap = (maxSeconds * voice.sampleRate).toInt()
+        // The tail is cut to leave the prompt at least half the reference,
+        // rather than the prompt being dropped when the tail happens not to
+        // fit. Unreachable while the tail is two seconds and the cap is ten -
+        // but "the prompt is always in the reference" is the invariant this
+        // whole class exists to hold, and the previous attempt at this failed
+        // by breaking it. An invariant that depends on two constants staying in
+        // the right order is not being held, it is being got away with.
+        val carried = resample(tail.snapshot(), from = outputRate, to = voice.sampleRate)
+        val recent = if (carried.size > cap / 2) {
+            carried.copyOfRange(carried.size - cap / 2, carried.size)
+        } else {
+            carried
+        }
+        val room = cap - recent.size
         // The head of the prompt rather than its end, matching how an
         // over-long prompt is trimmed everywhere else in this package, and
         // keeping the recording's natural onset.
