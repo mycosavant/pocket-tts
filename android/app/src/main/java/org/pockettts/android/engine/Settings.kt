@@ -83,32 +83,6 @@ class Settings(context: Context) {
         get() = prefs.getBoolean(KEY_STEADY_VOICE, true)
         set(value) = prefs.edit { putBoolean(KEY_STEADY_VOICE, value) }
 
-    /**
-     * Whether each chunk is conditioned on the end of the one before it.
-     *
-     * The fixed seed above makes every sentence draw the *same speaker*. It
-     * cannot make them sound like one continuous delivery, because nothing
-     * generated crosses a sentence boundary: each is an independent generation
-     * from the same prompt, so pitch, pace and energy reset at every full stop.
-     * On a paragraph that is audible as a voice that keeps resettling.
-     *
-     * With this on, the reference for each chunk is the voice prompt plus the
-     * last couple of seconds actually spoken - see [VoiceContinuity]. The
-     * prompt never leaves it, so identity cannot drift the way it did when this
-     * was last attempted.
-     *
-     * It closes the seams between chunks and not the ones between sentences
-     * inside a chunk. Doing the latter needs the text split before sherpa-onnx
-     * sees it, and measured on a device that cost a third of the generation
-     * speed for nothing sherpa was not going to re-split anyway. This costs
-     * nothing measurable, so it is worth having on its own terms.
-     *
-     * Off by default until it has been listened to rather than reasoned about.
-     */
-    var carryVoiceBetweenChunks: Boolean
-        get() = prefs.getBoolean(KEY_VOICE_CONTINUITY, false)
-        set(value) = prefs.edit { putBoolean(KEY_VOICE_CONTINUITY, value) }
-
     /** The seed to hand the generator, or -1 for a fresh draw each sentence. */
     val voiceSeed: Int get() = if (steadyVoice) FIXED_SEED else RANDOM_SEED
 
@@ -233,7 +207,6 @@ class Settings(context: Context) {
         private const val KEY_CODE_BLOCKS = "speak_code_blocks"
         private const val KEY_SELECTION_MARKDOWN = "selection_markdown"
         private const val KEY_STEADY_VOICE = "steady_voice"
-        private const val KEY_VOICE_CONTINUITY = "voice_continuity"
         private const val KEY_TEMPERATURE = "temperature"
         private const val KEY_SCRATCHPAD = "scratchpad"
         private const val KEY_GLASS_ALPHA = "glass_alpha"

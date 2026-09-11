@@ -86,46 +86,24 @@ class PocketTts private constructor(
         numSteps: Int,
         temperature: Float,
         seed: Int,
-        continuity: VoiceContinuity? = null,
         onAudio: (FloatArray) -> Boolean,
     ): Boolean = synthesisLock.withLock {
         withContext(Dispatchers.Default) {
             var completed = true
-            // One call for the whole text, always, and sherpa-onnx does its own
-            // splitting - which means the reference changes once per chunk
-            // rather than once per sentence.
-            //
-            // This was per sentence, and the device said no twice over.
-            // Generation fell from 1.12x real time to 0.73x, which is below
-            // playback and makes gaps arithmetic rather than bad luck: the
-            // reference is re-encoded per generation call, and a chunk is two
-            // or three sentences, so splitting first paid that cost two or
-            // three times over. And it could not even deliver what it cost.
-            // sherpa-onnx re-splits whatever it is handed, so pre-splitting
-            // does not decide what a sentence is, it only decides how often
-            // the reference is encoded - "Pray for those who hurt you. . . ."
-            // still reached the model as a request to speak three bare full
-            // stops however carefully this side cut it up.
-            //
-            // So the reference is chosen per call and the voice is carried
-            // across chunk boundaries only. Fewer seams closed, at no cost at
-            // all: the reference is the same ten seconds either way, so this
-            // encodes exactly as much as reading with the switch off.
-            val reference = continuity?.reference() ?: voice.samples
             val config = generationConfig(
-                reference,
-                voice.sampleRate,
+                voice,
                 speed,
                 numSteps,
                 temperature,
                 seed,
             )
-            // Timed from the call to the first sample out of it. That interval
-            // is the voice embedding being encoded plus the model's first pass,
-            // and it is the only place the cost of a moving reference is
-            // visible: sherpa-onnx caches the embedding against a hash of the
-            // reference samples, so a prompt that never changes is encoded once
-            // per process and one that moves every chunk is a miss every chunk.
+            // Timed from the call to the first sample out of it: the voice
+            // embedding being encoded plus the model's first pass, which is the
+            // wait before a chunk starts and the only interval that moves when
+            // the conditioning does. sherpa-onnx caches the embedding against a
+            // hash of the reference samples, so a prompt that never changes is
+            // encoded once per process and one that moves is a miss every time -
+            // which is what made this figure worth having.
             val startedAt = System.currentTimeMillis()
             var firstSampleMillis = -1L
             try {
@@ -136,7 +114,6 @@ class PocketTts private constructor(
                         if (firstSampleMillis < 0) {
                             firstSampleMillis = System.currentTimeMillis() - startedAt
                         }
-                        continuity?.record(samples)
                         if (onAudio(samples)) true else {
                             completed = false
                             false
@@ -152,9 +129,9 @@ class PocketTts private constructor(
                 // that throws still leaves its breadcrumb.
                 VoiceTrace.generated(
                     voiceId = voice.id,
-                    promptSamples = reference.size,
+                    promptSamples = voice.samples.size,
                     promptRate = voice.sampleRate,
-                    promptHash = reference.contentHashCode(),
+                    promptHash = voice.samples.contentHashCode(),
                     temperature = temperature,
                     seed = seed,
                     firstSampleMillis = firstSampleMillis,
@@ -227,26 +204,10 @@ class PocketTts private constructor(
             numSteps: Int,
             temperature: Float,
             seed: Int,
-        ): GenerationConfig =
-            generationConfig(voice.samples, voice.sampleRate, speed, numSteps, temperature, seed)
-
-        /**
-         * The same, for a reference that is not simply the voice's own prompt.
-         *
-         * [VoiceContinuity] builds one out of the prompt and the end of what
-         * has just been spoken, so the audio and the id part company here.
-         */
-        fun generationConfig(
-            referenceAudio: FloatArray,
-            referenceSampleRate: Int,
-            speed: Float,
-            numSteps: Int,
-            temperature: Float,
-            seed: Int,
         ): GenerationConfig = GenerationConfig(
             speed = speed,
-            referenceAudio = referenceAudio,
-            referenceSampleRate = referenceSampleRate,
+            referenceAudio = voice.samples,
+            referenceSampleRate = voice.sampleRate,
             numSteps = numSteps,
             extra = mapOf(
                 "temperature" to temperature.toString(),
@@ -264,10 +225,11 @@ class PocketTts private constructor(
                 //
                 // TextChunker has already cut this text at sentence boundaries,
                 // to a size chosen for time-to-first-audio. Re-splitting it is
-                // redundant work that costs continuity, so these two ask for a
-                // chunk to be left whole: above MAX, so SplitLongSentence never
-                // fires, and above it again for the merge, so every sentence in
-                // the chunk is accumulated back into one.
+                // redundant work that reopens seams this app has already closed,
+                // so these two ask for a chunk to be left whole: above MAX, so
+                // SplitLongSentence never fires, and above it again for the
+                // merge, so every sentence in the chunk is accumulated back
+                // into one.
                 "max_char_in_sentence" to WHOLE_CHUNK.toString(),
                 "min_char_in_sentence" to WHOLE_CHUNK.toString(),
             ),

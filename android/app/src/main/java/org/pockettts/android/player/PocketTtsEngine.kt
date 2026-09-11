@@ -4,7 +4,6 @@ import android.content.Context
 import org.pockettts.android.engine.ModelManager
 import org.pockettts.android.engine.PocketTts
 import org.pockettts.android.engine.Settings
-import org.pockettts.android.engine.VoiceContinuity
 import org.pockettts.android.engine.VoiceCatalog
 import org.pockettts.android.debug.VoiceTrace
 
@@ -17,18 +16,6 @@ class PocketTtsEngine(
     private val settings = Settings(context)
 
     private var voice: PocketTts.LoadedVoice? = null
-
-    /**
-     * The voice being carried between sentences, for as long as this engine is.
-     *
-     * One of these per engine, and the reader builds an engine per utterance -
-     * so continuity spans a whole read and nothing leaks from the last one into
-     * the next.
-     */
-    private var continuity: VoiceContinuity? = null
-
-    /** So the continuity line lands once per read rather than once per chunk. */
-    private var announced = false
 
     override val sampleRate: Int get() = tts.sampleRate
 
@@ -44,8 +31,6 @@ class PocketTtsEngine(
     override suspend fun useVoice(voiceId: String, caller: String) {
         this.caller = caller
         voice = resolve(voiceId)
-        continuity = null
-        announced = false
     }
 
     override suspend fun synthesize(
@@ -55,25 +40,7 @@ class PocketTtsEngine(
     ): Boolean {
         val loaded = voice ?: resolve(VoiceCatalog.DEFAULT_VOICE_ID).also { voice = it }
         // Read per call rather than held, so moving a slider changes the next
-        // sentence rather than the next read. The continuity is the exception:
-        // it is the read's own accumulated context, and it is kept rather than
-        // discarded when the setting goes off mid-read - so turning it back on
-        // conditions the next chunk on audio from before the gap. Harmless at
-        // this scale, and cheaper than deciding what "off" should mean to
-        // something that has already been accumulated.
-        val carried = if (settings.carryVoiceBetweenChunks) {
-            continuity ?: VoiceContinuity(loaded, tts.sampleRate).also { continuity = it }
-        } else {
-            null
-        }
-        if (!announced) {
-            announced = true
-            VoiceTrace.continuity(
-                carrying = carried?.usable == true,
-                promptRate = loaded.sampleRate,
-                outputRate = tts.sampleRate,
-            )
-        }
+        // chunk rather than the next read.
         return tts.synthesize(
             text,
             loaded,
@@ -81,7 +48,6 @@ class PocketTtsEngine(
             settings.decodeSteps,
             settings.temperature,
             settings.voiceSeed,
-            carried,
             onAudio,
         )
     }

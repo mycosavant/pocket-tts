@@ -463,9 +463,7 @@ that work undone. A chunk is comfortably inside the generation's own `max_frames
 cap of 500 frames: 400 characters is roughly 28 seconds of speech at the model's
 frame rate.
 
-What that leaves is one restart per chunk instead of one per sentence, which is
-also what makes carrying the voice between chunks worth a second look rather
-than the workaround for sherpa's splitting that it started life as.
+What that leaves is one restart per chunk instead of one per sentence.
 
 On a device, that change removed almost all of the clipped first syllable, at
 both step counts. **And one flow-decoding step was then reported closer to the
@@ -485,91 +483,58 @@ not, because its voices are precomputed embeddings from
 somebody recorded into a voice, so that bundle cannot clone one. The temperature
 is 0.3 in both.
 
-## What the seed could not fix
+## What the seed could not fix, and what did
 
 Pinning the seed made every sentence draw the *same speaker*, and that is what
 stopped a paragraph being read by a succession of different people. It left a
-residue, reported from the device as "still drifting, not as bad as before", and
-the residue has a different cause: nothing generated crosses a sentence
-boundary. Each sentence is an independent generation from the same prompt, so
-timbre holds - the seed sees to that - while pitch, pace and energy reset at
-every full stop. Over several paragraphs that is audible as a voice that keeps
-resettling.
+residue, reported from the device as "still drifting, not as bad as before".
 
-The standard fix for chunked neural TTS is to condition what is about to be
-generated on what was just spoken. This repository has tried that once before
-and deleted it, and the second attempt went a step further than the first and
-had to come back.
+The obvious explanation was that nothing generated crosses a sentence boundary,
+so pitch, pace and energy reset at every full stop even when timbre holds. The
+standard fix for chunked neural TTS follows from it: condition what is about to
+be generated on what was just spoken. This repository has now tried that twice
+and deleted it twice, and the second attempt is worth a paragraph because of how
+it failed.
 
-**What the first attempt got wrong, and this does not.** It replaced the voice
-prompt with generated audio and never went back, so a long read walked away from
-the voice that was chosen - a mechanism for producing "it isn't the selected
-voice", which is a worse complaint than the one it set out to fix. In
-`VoiceContinuity` the prompt is always the head of the reference and only the
-tail is recent speech, so identity is re-anchored on every generation and only
-the delivery is inherited. `VoiceContinuityTest` fails against the old
-behaviour.
+It worked, in the sense that it did what it said. `VoiceContinuity` made each
+chunk's reference the voice prompt plus the last two seconds actually spoken,
+with the prompt always the head - so identity was re-anchored on every
+generation, which is the thing the first attempt got wrong. Three tests pinned
+that. On a device it sounded *slightly worse*, and it cost a Mimi encode of
+50-70 ms per chunk, because sherpa-onnx caches the voice embedding in a 50-entry
+LRU keyed by a hash of the reference samples: a prompt that never changes is
+encoded once per process, and one that moves every chunk is a miss every chunk.
+"The same ten seconds either way" is exactly what makes it not free.
 
-**What the second attempt got wrong.** #2 said conditioning per chunk "could not
-have worked" because a chunk is two or three sentences and the redraws happen
-per sentence, so the obvious next move was to split the text into sentences
-first and condition each one. Measured on a device, that is a bad trade twice
-over:
+Then the splitting came to light, and the residue turned out not to be a missing
+mechanism at all - it was sherpa-onnx cutting a chunk back into sentences and
+generating each one independently. Four lines of `extra` map fixed it, the
+clipped first syllables went away on the device, and what `VoiceContinuity` had
+been built to work around no longer existed. It was cut before this merged.
 
-- **It costs a third of the generation speed.** The reference is re-encoded once
-  per generation call, so splitting a chunk into three sentences pays that cost
-  three times. Generation fell from 1.12x real time to **0.73x**, which is below
-  playback - at which point gaps are arithmetic rather than bad luck, and the
-  underrun counter agrees.
-- **It does not decide what a sentence is.** sherpa-onnx re-splits whatever it is
-  handed, so splitting first only changes how often the reference is encoded.
-  `. . . .` - an ellipsis typed as spaced periods, ordinary in scripture and
-  older prose - still reached the model as a request to speak three bare full
-  stops, however carefully this side folded them into their neighbours, and what
-  comes back is breathing and a loop of noise.
+Two things it found on the way out are worth keeping in mind, because both were
+found by the device rather than by reasoning:
 
-So the reference is chosen once per chunk. That closes the seams between chunks
-and leaves the ones between sentences inside a chunk, which is less than was
-hoped for.
+- **A sample-rate guard made it inert.** The stock prompts are 48 kHz, the model
+  generates at 24 kHz, and the guard stood down on mismatch - silently, on the
+  default voice, while the splitting it paid for went on happening. All of the
+  cost and none of the effect. Two runs went into working out that a prompt hash
+  which never changed meant "disabled" rather than "switched off", which is why
+  the voice trace now says outright what it is doing.
+- **Per-sentence conditioning cost a third of the generation speed.** The
+  reference is re-encoded once per generation call, so splitting a chunk into
+  three sentences pays it three times: 1.12x real time fell to **0.73x**, below
+  playback, at which point gaps are arithmetic rather than bad luck. And it did
+  not even decide what a sentence was, because sherpa-onnx re-splits whatever it
+  is handed - `. . . .`, an ellipsis typed as spaced periods and ordinary in
+  scripture and older prose, still reached the model as a request to speak three
+  bare full stops however carefully this side folded them into their neighbours.
 
-**It is not free, and the reason is worth knowing.** sherpa-onnx caches the
-encoded voice embedding in a 50-entry LRU keyed by a hash of the reference
-samples, and skips the Mimi encoder on a hit. With this off the prompt is
-byte-identical on every call, so the encoder runs once per process per voice.
-With it on, every chunk after the first is a different array - the same ten
-seconds, never the same bytes - so it is a cache miss and a full encode, once
-per chunk. "The same length either way" is exactly what makes it *not* free.
-
-`Metrics.generationRealTimeFactor` cannot see that: it is measured on the first
-chunk of a read, and the first chunk has no context yet in either mode, so its
-reference is the plain prompt and always a cache hit. That is why each
-`[chunk n]` trace line now carries `first=NNNms` - wall clock from asking for
-the chunk to its first sample, which is the encode plus the model's first pass.
-With the switch on that figure should jump by one encode on every chunk after
-the first, and how big that jump is decides whether this is worth having.
-
-The two halves are concatenated into one array under one declared sample rate,
-so a prompt recorded at a rate the model does not generate at would play one
-half at the wrong speed. The first attempt guarded that by standing down to the
-prompt alone - and the stock prompts are 48 kHz while the model generates at
-24 kHz, so on a real device that guard disabled the whole feature, silently, on
-the default voice, while the splitting it paid for went on happening. All of the
-cost and none of the effect. The tail is resampled now; linear interpolation,
-which would be too crude for playback and is not being played.
-
-That was invisible from the outside - a prompt hash that never changed reads as
-"nothing is happening", and could equally have been the switch being off. Two
-runs on the device went into working out which. The voice trace now says
-outright whether the voice is being carried, and at which rates.
-
-**It is off by default**, until it has been listened to rather than reasoned
-about. Nothing in the measurements argues against it any more - it encodes
-exactly as much as reading with the switch off - but whether it actually sounds
-steadier is not something that can be settled from here.
-
-The voice trace is the outward sign that it is working: the prompt hash changes
-from one chunk to the next when the voice is being carried, and is identical
-every time when it is not.
+What survived is the instrumentation, which is the part that settled any of it:
+each `[chunk n]` line carries `first=NNNms`, wall clock from asking for a chunk
+to its first sample, so the encode is inside it and the blocking write is not.
+`Metrics.generationRealTimeFactor` cannot see that interval - it is taken on the
+first chunk of a read, which is always a cache hit.
 
 ## Who is actually speaking
 

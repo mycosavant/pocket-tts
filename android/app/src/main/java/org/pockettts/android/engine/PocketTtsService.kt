@@ -192,35 +192,14 @@ class PocketTtsService : TextToSpeechService() {
                 val speed = (request.speechRate / 100f)
                     .coerceIn(Settings.MIN_SPEED, Settings.MAX_SPEED)
                 val steps = settings.decodeSteps
-                // The same speaker draw the in-app reader uses. This path had
-                // no continuity of any kind, so it is the one where a voice
-                // wandering per sentence was worst - and it is the path most
-                // people spend their day in, since Select to Speak and reader
-                // apps all arrive here.
+                // The same speaker draw the in-app reader uses - and this is
+                // the path most people spend their day in, since Select to
+                // Speak and reader apps all arrive here.
                 val temperature = settings.temperature
                 val seed = settings.voiceSeed
 
                 callback.start(engine.sampleRate, AudioFormat.ENCODING_PCM_16BIT, 1)
                 val maxBytes = callback.maxBufferSize
-
-                // One per request, so a passage read through Select to Speak
-                // carries its own voice from sentence to sentence and nothing
-                // survives into whatever asks next. This path had no continuity
-                // of any kind, and it is the one most days are spent in.
-                val carried = if (settings.carryVoiceBetweenChunks) {
-                    VoiceContinuity(voice, engine.sampleRate)
-                } else {
-                    null
-                }
-                // Announced here as well as in the reader. Without it a read
-                // through Select to Speak left no line saying whether the voice
-                // was being carried, which is the exact silence this line was
-                // added to end - and this is the path most days are spent in.
-                VoiceTrace.continuity(
-                    carrying = carried?.usable == true,
-                    promptRate = voice.sampleRate,
-                    outputRate = engine.sampleRate,
-                )
 
                 for (chunk in TextChunker.chunk(speakable)) {
                     if (stopRequested.get() || EngineTurn.superseded(turn)) break
@@ -236,7 +215,6 @@ class PocketTtsService : TextToSpeechService() {
                         steps,
                         temperature,
                         seed,
-                        carried,
                     ) { samples ->
                         val giveUp = stopRequested.get() || EngineTurn.superseded(turn)
                         if (giveUp) false else deliver(callback, samples, maxBytes)
