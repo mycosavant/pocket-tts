@@ -34,6 +34,13 @@ meaningful: strip the text and they no longer point anywhere the caller could
 highlight. The app's own screens still strip, because there the Markdown is the
 user's own and reading it as prose is the point.
 
+**A read-aloud broadcast, for scripts and agents.** `am broadcast -n
+org.pockettts.android/.SpeakReceiver --es text "..."` reads text with no window
+and no foreground app, which is the one thing the selection window cannot do -
+an activity start needs a foreground caller. It was built for a coding agent on
+the same phone: a reply finishes and it is read, rather than copied, switched to
+and pasted. See [reading Claude Code's replies aloud](docs/read-aloud-from-claude-code.md).
+
 **A Markdown scratchpad.** Type or paste, hit speak. Markdown is stripped for
 speaking, so `## Heading` is spoken as "Heading" rather than "hash hash
 Heading", `**bold**` loses its asterisks, links are read as their text instead
@@ -218,6 +225,28 @@ it as it goes - per chunk and per audio callback, so a request arriving
 mid-sentence does not have to wait out the rest of it. Finding the turn has
 moved on means somebody asked more recently, and standing down is the only
 thing that produces intelligible audio.
+
+## A queue, where a turn will not do
+
+`EngineTurn` arbitrates between the two things that drive the one model, and its
+rule is that the most recent request wins. That is the right rule for two
+callers who cannot see each other, and exactly the wrong one for a caller
+sending several things to hear in order: an agent handing over one reply while
+the last is still being read would have each one silence the one before it, and
+a run of them would play as the last few words of the last.
+
+So `Reader` has its own queue and `enqueue` joins it, while `speak` still
+replaces. Nothing about standing down for a stranger answers "after that one",
+and stretching `EngineTurn` to cover both would have made the same counter mean
+two opposite things.
+
+What the queue is careful about is whose it is. A `speak` that replaces the
+current read drops what was queued behind it - those follow-ups belonged to the
+passage being abandoned, and carrying them over would play a replacement
+followed by the tail of the thing it replaced. A stop drops them too. Skipping
+forward off the end of the last chunk does *not*: that is an ending like any
+other, and it is the one ending that does not arrive through the reading job
+completing, so it advances the queue by hand.
 
 ## The reader has one state machine, and it is testable
 

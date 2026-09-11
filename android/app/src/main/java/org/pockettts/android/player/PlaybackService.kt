@@ -225,8 +225,23 @@ class PlaybackService : Service() {
         const val ACTION_SKIP_FORWARD = "org.pockettts.android.SKIP_FORWARD"
         const val ACTION_STOP = "org.pockettts.android.STOP"
 
+        /**
+         * Starts the service, or carries on without it.
+         *
+         * The system refuses a foreground service started from the background
+         * outright, and a read asked for over
+         * [SpeakReceiver][org.pockettts.android.SpeakReceiver] begins there by
+         * design - phone in a pocket, screen off. The refusal costs the read
+         * its protection from being swapped away and its notification; it does
+         * not stop the reader, which is already running. Taking the caller down
+         * over it would.
+         */
         fun start(context: Context) {
-            context.startForegroundService(Intent(context, PlaybackService::class.java))
+            runCatching {
+                context.startForegroundService(Intent(context, PlaybackService::class.java))
+            }.onFailure {
+                Log.w(TAG, "Could not start playback; reading continues unprotected", it)
+            }
         }
 
         fun stop(context: Context) {

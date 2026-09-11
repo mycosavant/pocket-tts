@@ -57,6 +57,11 @@ class AudioFocus(private val context: Context) {
     /** @return false when the system refused, in which case nothing should play. */
     fun request(): Boolean {
         val audio = manager ?: return true
+        // Asked for on every start command, and a queued read makes a second
+        // one routine rather than exceptional. Building a fresh request each
+        // time would leave the previous one holding a claim that nothing ever
+        // abandons, since `release` only knows about the last.
+        if (request != null) return true
         val attributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)

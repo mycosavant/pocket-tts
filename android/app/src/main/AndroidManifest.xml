@@ -106,5 +106,32 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
+        <!--
+            Exported so a coding agent on this phone can hand a finished reply
+            straight to the reader, with the screen off - which is the one thing
+            ReadAloudActivity cannot do, since an activity start needs a
+            foreground caller.
+
+            The caller is a different app, so there is no signature-level
+            permission to hold this behind: a signature check would only ever
+            admit apps signed with this app's key, and the whole point is the
+            ones that are not. So the trade, plainly: any app on the device can
+            make this one start reading, replace what it is reading, or read out
+            any file this app can open. Nothing comes back - there is no result,
+            no broadcast out, no way to hear what was read except by being in
+            the room - so it is a nuisance rather than a leak, but it is a real
+            one and it is the price of the feature.
+
+            No intent-filter, deliberately. An exported receiver with no filter
+            is reachable only by explicit component, so it never appears as a
+            candidate for somebody else's implicit broadcast.
+
+            PlaybackService stays unexported. This is the front door; the
+            service behind it is nobody else's business.
+        -->
+        <receiver
+            android:name=".SpeakReceiver"
+            android:exported="true" />
+
     </application>
 </manifest>
