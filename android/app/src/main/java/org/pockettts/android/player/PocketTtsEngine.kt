@@ -19,7 +19,17 @@ class PocketTtsEngine(
 
     override val sampleRate: Int get() = tts.sampleRate
 
-    override suspend fun useVoice(voiceId: String) {
+    /**
+     * Who asked for the current read, for the trace.
+     *
+     * Held rather than passed down because [synthesize] can resolve a voice on
+     * its own when nothing selected one, and a line in the trace attributed to
+     * nobody is the line that starts the next wrong search.
+     */
+    private var caller: String = "reader"
+
+    override suspend fun useVoice(voiceId: String, caller: String) {
+        this.caller = caller
         voice = resolve(voiceId)
     }
 
@@ -52,30 +62,45 @@ class PocketTtsEngine(
     private suspend fun resolve(voiceId: String): PocketTts.LoadedVoice {
         val manager = ModelManager(context)
         VoiceCatalog.byId(voiceId)?.let { stock ->
-            VoiceTrace.resolved(
-                caller = "reader",
-                requested = voiceId,
-                resolved = voiceId,
-                promptBytes = manager.voiceFile(voiceId).length(),
-                expectedBytes = stock.bytes,
-            )
-            return tts.loadVoice(stock)
+            // Recorded in a finally, after the load rather than before it.
+            // loadVoice is what fetches the prompt, so asking the file its size
+            // first reported "prompt file missing" for every first read after an
+            // install - on a read that then went on to work perfectly. That is
+            // the one line whose whole job is to make a genuinely missing prompt
+            // unmistakable, and it was crying wolf. A finally rather than an
+            // ordinary statement because a load that throws still has to leave
+            // the breadcrumb, and in that case the file really is missing.
+            try {
+                return tts.loadVoice(stock)
+            } finally {
+                VoiceTrace.resolved(
+                    caller = caller,
+                    requested = voiceId,
+                    resolved = voiceId,
+                    promptBytes = manager.voiceFile(voiceId).length(),
+                    expectedBytes = stock.bytes,
+                )
+            }
         }
-        // Not a stock voice, so it is one the user imported.
+        // Not a stock voice, so it is one the user imported. Nothing fetches
+        // these, so the size is already true before the load.
         val imported = manager.voiceFile(voiceId)
         if (imported.isFile) {
-            VoiceTrace.resolved("reader", voiceId, voiceId, imported.length(), 0)
+            VoiceTrace.resolved(caller, voiceId, voiceId, imported.length(), 0)
             return tts.loadVoiceFile(voiceId, imported)
         }
         val fallback = VoiceCatalog.default()
-        VoiceTrace.resolved(
-            caller = "reader",
-            requested = voiceId,
-            resolved = fallback.id,
-            promptBytes = manager.voiceFile(fallback.id).length(),
-            expectedBytes = fallback.bytes,
-        )
-        return tts.loadVoice(fallback)
+        try {
+            return tts.loadVoice(fallback)
+        } finally {
+            VoiceTrace.resolved(
+                caller = caller,
+                requested = voiceId,
+                resolved = fallback.id,
+                promptBytes = manager.voiceFile(fallback.id).length(),
+                expectedBytes = fallback.bytes,
+            )
+        }
     }
 
     companion object : SpeechEngine.Factory {

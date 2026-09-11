@@ -18,6 +18,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.pockettts.android.R
+import org.pockettts.android.debug.Metrics
 import org.pockettts.android.ui.MainActivity
 
 /**
@@ -239,8 +240,17 @@ class PlaybackService : Service() {
         fun start(context: Context) {
             runCatching {
                 context.startForegroundService(Intent(context, PlaybackService::class.java))
+            }.onSuccess {
+                Metrics.playbackProtection = "started"
             }.onFailure {
                 Log.w(TAG, "Could not start playback; reading continues unprotected", it)
+                // Recorded where it can be read. A phone has no logcat within
+                // reach, so a read that played with no controls and no
+                // notification looked like a missing feature; it is a refused
+                // background start, and the exception names it.
+                Metrics.playbackProtection =
+                    "refused (${it.javaClass.simpleName}) - no controls or notification; " +
+                        "allow background activity for Pocket TTS in battery settings"
             }
         }
 

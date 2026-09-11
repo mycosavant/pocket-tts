@@ -59,6 +59,18 @@ jobs:
         ./tools/check-jni-callback.sh app/build/outputs/apk/debug/app-debug.apk
         ./tools/check-jni-callback.sh app/build/outputs/apk/release/app-release.apk
 
+    # A runner has no ~/.android/debug.keystore, so before the key was
+    # committed the plugin generated a new one per run and every artefact this
+    # workflow uploaded was a different app as far as a phone is concerned:
+    # uninstall-only, and refused outright by a device that kept its data. That
+    # is a property of the artefact, invisible in the build file, and it
+    # regresses the moment the keystore goes missing from a checkout.
+    - name: Check the APKs are signed by the committed key
+      working-directory: android
+      run: |
+        ./tools/check-signing.sh app/build/outputs/apk/debug/app-debug.apk
+        ./tools/check-signing.sh app/build/outputs/apk/release/app-release.apk
+
     # Every run of this workflow uploads an APK. Without the commit in the
     # name they are indistinguishable in the Actions list, and it is very easy
     # to sideload a stale build and conclude a fix did not work.

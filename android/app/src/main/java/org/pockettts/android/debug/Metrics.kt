@@ -60,6 +60,22 @@ object Metrics {
         get() = underrunCount.get()
         set(value) = underrunCount.set(value)
 
+    /**
+     * Whether the last read got its foreground service, and why not if it did not.
+     *
+     * A read asked for over the broadcast begins with this app in the
+     * background, and Android refuses a foreground service started from there.
+     * The read still plays - the reader does not depend on the service - but it
+     * loses its notification, its lock-screen controls, its audio-focus claim
+     * and its protection from being killed mid-sentence.
+     *
+     * That refusal was a `Log.w` nobody on a phone can read, so "it read but
+     * there were no controls" had no on-device explanation and looked like a
+     * missing feature rather than a permission. Null until a read has tried.
+     */
+    @Volatile
+    var playbackProtection: String? = null
+
     val utterancesRead: Int get() = utterances.get()
 
     fun reset() {
@@ -68,6 +84,7 @@ object Metrics {
         generationRtfMilli.set(0)
         underrunCount.set(0)
         utterances.set(0)
+        playbackProtection = null
     }
 
     /**
@@ -80,7 +97,8 @@ object Metrics {
         appendLine("model load: ${millis(modelLoadMillis)}")
         appendLine("time to first audio: ${millis(timeToFirstAudioMillis)}")
         appendLine("generation speed: ${factor(generationRealTimeFactor)}")
-        append("audio underruns: ${if (utterancesRead == 0) "not measured yet" else "$underruns"}")
+        appendLine("audio underruns: ${if (utterancesRead == 0) "not measured yet" else "$underruns"}")
+        append("playback service: ${playbackProtection ?: "not started yet"}")
     }
 
     private fun millis(value: Long): String =

@@ -12,6 +12,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -155,6 +156,42 @@ class TransportTest {
         // reaches the end by itself, so "it ended" is not evidence that
         // anything was asked of it.
         awaitFor(id, "stopped") { it is Reader.State.Stopped }
+        Unit
+    }
+
+    @Test
+    fun `stop is offered as a custom action, since the system draws no stop button`() {
+        // ACTION_STOP in the action mask is not enough: the system player has
+        // buttons for play, pause and the two skips and nothing else, so a read
+        // started from the broadcast had no way to be ended from the shade. A
+        // custom action is the only way to put a fourth button there.
+        val published = Transport.playbackState(context, speaking(paused = false, audible = true))
+        assertNotNull("no playback state built at all", published)
+        val ids = published.customActions.map { it.action }
+        assertTrue("no stop custom action, only $ids", Transport.ACTION_STOP in ids)
+    }
+
+    @Test
+    fun `the stop custom action ends the read`() = runBlocking {
+        val id = startHeldRead()
+
+        transport.callback.onCustomAction(Transport.ACTION_STOP, null)
+        engine.gate?.complete(Unit)
+        awaitFor(id, "stopped") { it is Reader.State.Stopped }
+        Unit
+    }
+
+    @Test
+    fun `an unknown custom action is ignored rather than treated as stop`() = runBlocking {
+        val id = startHeldRead()
+
+        transport.callback.onCustomAction("something.else", null)
+        // Still reading: a button this app does not own must not end the read.
+        assertTrue(
+            "an unrecognised action stopped the read",
+            Reader.state.value.let { it.utterance == id && it !is Reader.State.Stopped },
+        )
+        engine.gate?.complete(Unit)
         Unit
     }
 

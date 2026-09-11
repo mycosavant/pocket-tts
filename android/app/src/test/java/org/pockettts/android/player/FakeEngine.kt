@@ -19,11 +19,16 @@ class FakeEngine(
     var voiceId: String? = null
         private set
 
+    /** Who the reader said was asking; see [Reader.Source.traceName]. */
+    var caller: String? = null
+        private set
+
     /** Completed by the test to let a synthesis call finish, when it wants control. */
     var gate: CompletableDeferred<Unit>? = null
 
-    override suspend fun useVoice(voiceId: String) {
+    override suspend fun useVoice(voiceId: String, caller: String) {
         this.voiceId = voiceId
+        this.caller = caller
     }
 
     override suspend fun synthesize(

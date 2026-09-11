@@ -106,10 +106,28 @@ be registered as a `Stop` hook with no changes:
   "command": "~/.claude/hooks/speak-last.sh" } ] } ] } }
 ```
 
+## Controls, and the battery setting they need
+
+A read started this way begins with Pocket TTS in the background, and Android
+refuses a foreground service started from there. The read still plays - the
+reader does not depend on the service - but without it there is no notification,
+no lock-screen or quick-settings controls, no audio-focus claim, and nothing
+stopping the system killing the read mid-sentence.
+
+Allowing Pocket TTS to run unrestricted in the battery settings is what grants
+it. On a Samsung device: *Settings → Apps → Pocket TTS → Battery →
+Unrestricted*. With that set, a broadcast read appears in the shade with skip
+back, pause, skip forward and stop, and on the lock screen, and answers the
+buttons on a headset.
+
+Timings says which of the two happened - `playback service: started`, or
+`refused (...)` with the reason - so "it read but there were no controls" has an
+answer on the device rather than in a log nobody can reach.
+
 ## When nothing comes out
 
 The whole point of this path is that there is no window, which also means there
-is nothing on screen to tell you what went wrong. Work down the list:
+is nothing on screen to tell you what went wrong.
 
 ```bash
 # 1. Is it the script or the app?
@@ -117,16 +135,24 @@ CLAUDE_TTS=print ~/.claude/hooks/speak-last.sh
 
 # 2. Does the app read a fixed string?
 am broadcast -n org.pockettts.android/.SpeakReceiver --es text "Receiver check."
-
-# 3. What did the app make of it?
-logcat -d -s SpeakReceiver:* Reader:* PocketTts:* PlaybackService:* AudioFocus:*
 ```
 
-Step 3 is the one that answers it. `SpeakReceiver` logs every broadcast it
-accepts and every one it ignores, with the reason; `PocketTts` logs the model
-load, which on a cold start is seconds of silence that is not a fault;
-`AudioFocus` logs focus being taken away by something else.
+Then open Pocket TTS and tap **Timings**. That is the instrument, not `logcat`:
+Android stopped letting an app read another app's logs at 4.1, and Termux is an
+ordinary app, so `logcat` from there shows you Termux and nothing else. Reading
+the app's own log needs adb - over wireless debugging, to the phone from itself,
+if you want it.
 
-If the sheet opens with the text in it and nothing is spoken, the read is
-reaching `Reader` and the problem is downstream of it - model still loading,
-media volume, or audio focus. The status line on the sheet says which.
+Timings answers most of it directly:
+
+| Line | What it settles |
+|------|-----------------|
+| `utterances read` | Whether the broadcast reached `Reader` at all. Force stop the app first so the count starts from zero and there is no doubt which read you are looking at. |
+| `time to first audio` | A cold start pays for the model bundle and the voice prompt inside the read - tens of seconds, and not a fault. The second read tells you the real number. |
+| `generation speed` | Below 1.0x real time means the model cannot keep up with its own playback, and gaps are arithmetic rather than bad luck. |
+| `playback service` | Whether the read got its notification and controls; see above. |
+| `[agent] asked for X, got Y` | Which source asked, and whether the voice that answered is the one that was asked for. `FELL BACK` or a prompt size that is not the expected one is the whole diagnosis. |
+
+A voice trace line reading `prompt file missing` on the *first* read after an
+install is the prompt being fetched during that read; it is recorded after the
+fetch, so seeing it on a warm read means the file really is gone.
