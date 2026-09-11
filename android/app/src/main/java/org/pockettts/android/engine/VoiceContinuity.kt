@@ -1,5 +1,7 @@
 package org.pockettts.android.engine
 
+import androidx.annotation.VisibleForTesting
+
 /**
  * Carries the voice from one sentence into the next.
  *
@@ -35,17 +37,28 @@ class VoiceContinuity(
     private val maxSeconds: Float = MAX_REFERENCE_SECONDS,
 ) {
 
+    private val outputRate = outputSampleRate
+
     /**
-     * False when the prompt and the model disagree about sample rate.
+     * False only when a rate is missing outright.
      *
-     * The two halves of the reference are concatenated into one array under one
-     * declared rate, so splicing 24 kHz speech onto a 16 kHz prompt would play
-     * one of them at the wrong speed and condition the model on a chipmunk.
-     * Resampling to fix that is a real piece of DSP and not worth it here, so
-     * this simply stands down and the prompt is used alone - which is the
-     * behaviour that was shipping anyway.
+     * This used to be `voice.sampleRate == outputSampleRate`, on the reasoning
+     * that the two halves of the reference travel as one array under one
+     * declared rate, so splicing speech at one rate onto a prompt at another
+     * would play one of them at the wrong speed. The reasoning is right and the
+     * guard was wrong: the stock prompts are not recorded at the rate the model
+     * generates at, so on the device this was written for it disabled the whole
+     * feature - silently, on the default voice, while the per-sentence
+     * splitting it pays for went on happening. All of the cost and none of the
+     * effect, and no way to tell from the outside.
+     *
+     * So the tail is resampled to the prompt's rate instead of the feature
+     * standing down. Linear interpolation, which would be too crude for
+     * playback and is not being played: this is a conditioning reference, and
+     * what the model reads out of it is timbre and cadence rather than the
+     * top octave.
      */
-    val usable: Boolean = voice.sampleRate == outputSampleRate
+    val usable: Boolean = voice.sampleRate > 0 && outputSampleRate > 0
 
     private val tail = AudioTail(
         if (usable) (tailSeconds * outputSampleRate).toInt() else 0,
@@ -68,7 +81,7 @@ class VoiceContinuity(
      */
     fun reference(): FloatArray {
         if (!hasContext) return voice.samples
-        val recent = tail.snapshot()
+        val recent = resample(tail.snapshot(), from = outputRate, to = voice.sampleRate)
         val room = (maxSeconds * voice.sampleRate).toInt() - recent.size
         if (room <= 0) return recent
         // The head of the prompt rather than its end, matching how an
@@ -80,6 +93,30 @@ class VoiceContinuity(
 
     fun reset() {
         tail.clear()
+    }
+
+    /**
+     * [samples] at a different rate, by linear interpolation.
+     *
+     * Deliberately the simplest thing that is correct about duration: the
+     * output is conditioning, never played, and a resampler with a proper
+     * anti-aliasing filter would be a large amount of code defending against
+     * artefacts nobody hears in a reference clip.
+     */
+    @VisibleForTesting
+    internal fun resample(samples: FloatArray, from: Int, to: Int): FloatArray {
+        if (from == to || from <= 0 || to <= 0 || samples.isEmpty()) return samples
+        val length = (samples.size.toLong() * to / from).toInt()
+        if (length <= 0) return FloatArray(0)
+        val out = FloatArray(length)
+        for (index in out.indices) {
+            val position = index.toDouble() * from / to
+            val left = position.toInt().coerceAtMost(samples.size - 1)
+            val right = (left + 1).coerceAtMost(samples.size - 1)
+            val fraction = (position - left).toFloat()
+            out[index] = samples[left] * (1f - fraction) + samples[right] * fraction
+        }
+        return out
     }
 
     companion object {

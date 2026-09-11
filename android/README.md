@@ -454,8 +454,27 @@ two reasons worth keeping in view:
 
 The two halves are concatenated into one array under one declared sample rate,
 so a prompt recorded at a rate the model does not generate at would play one
-half at the wrong speed. That case stands down to the prompt alone rather than
-splicing.
+half at the wrong speed. The first attempt guarded that by standing down to the
+prompt alone - and the stock prompts are *not* recorded at the rate the model
+generates at, so on a real device that guard disabled the whole feature,
+silently, on the default voice, while the per-sentence splitting it pays for
+went on happening. All of the cost and none of the effect. The tail is
+resampled now; linear interpolation, which would be too crude for playback and
+is not being played.
+
+That was invisible from the outside - a prompt hash that never changed reads as
+"nothing is happening", and could equally have been the switch being off. Two
+runs on the device went into working out which. The voice trace now says
+outright whether the voice is being carried, and at which rates.
+
+Splitting also has to be careful about what it hands over. `. . . .` - an
+ellipsis typed as spaced periods, ordinary in scripture and older prose - is
+four sentence ends in a row, so cutting on it produced three pieces that were a
+single full stop and nothing else. Asked to speak those one at a time the model
+returns breathing, sniffing and a loop of noise. It was never reachable before,
+because sherpa-onnx sees a whole chunk and handles punctuation it cannot
+pronounce itself. A piece with no letter or digit in it now joins the sentence
+it trails.
 
 **It is off by default, and that is a measurement rather than a preference.** It
 makes the model re-encode a reference once per sentence instead of once per

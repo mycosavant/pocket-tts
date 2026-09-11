@@ -27,6 +27,9 @@ class PocketTtsEngine(
      */
     private var continuity: VoiceContinuity? = null
 
+    /** So the continuity line lands once per read rather than once per chunk. */
+    private var announced = false
+
     override val sampleRate: Int get() = tts.sampleRate
 
     /**
@@ -42,6 +45,7 @@ class PocketTtsEngine(
         this.caller = caller
         voice = resolve(voiceId)
         continuity = null
+        announced = false
     }
 
     override suspend fun synthesize(
@@ -58,6 +62,14 @@ class PocketTtsEngine(
             continuity ?: VoiceContinuity(loaded, tts.sampleRate).also { continuity = it }
         } else {
             null
+        }
+        if (!announced) {
+            announced = true
+            VoiceTrace.continuity(
+                carrying = carried?.usable == true,
+                promptRate = loaded.sampleRate,
+                outputRate = tts.sampleRate,
+            )
         }
         return tts.synthesize(
             text,

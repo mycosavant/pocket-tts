@@ -50,6 +50,29 @@ object VoiceTrace {
         add("[$caller] asked for $requested, got $resolved$fellBack ($size)")
     }
 
+    /**
+     * Whether the voice is being carried between sentences, once per read.
+     *
+     * Added because it was not knowable from the outside. A guard on sample
+     * rates disabled the whole feature on the default voice and the only
+     * symptom was a prompt hash that never changed - which reads as "nothing is
+     * happening" and could equally have been the switch being off. Two runs
+     * were spent working out which.
+     */
+    @Synchronized
+    fun continuity(carrying: Boolean, promptRate: Int, outputRate: Int) {
+        add(
+            when {
+                !carrying -> "[continuity] off - each sentence starts from the prompt"
+                promptRate == outputRate ->
+                    "[continuity] on, prompt and model both $promptRate Hz"
+
+                else ->
+                    "[continuity] on, prompt $promptRate Hz and model $outputRate Hz, tail resampled"
+            },
+        )
+    }
+
     /** Records the conditioning one generation was given. */
     @Synchronized
     fun generated(

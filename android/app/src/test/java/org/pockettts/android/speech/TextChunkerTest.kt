@@ -112,4 +112,40 @@ class TextChunkerTest {
             split.joinToString("").filterNot { it.isWhitespace() },
         )
     }
+
+    @Test
+    fun `spaced periods do not become sentences with nothing to say`() {
+        // Reported from the device: this exact line produced breathing,
+        // sniffing and a loop of noise. ". . . ." is four sentence ends in a
+        // row, so cutting on it handed the model three requests to speak a
+        // single full stop, and that is what speaking silence sounds like.
+        val text = "Bless those who curse you. Pray for those who hurt you. . . . " +
+            "Love your enemies! Do good to them"
+        val split = TextChunker.sentences(text)
+
+        assertTrue(
+            "a piece with nothing to say survived: $split",
+            split.all { piece -> piece.any { it.isLetterOrDigit() } },
+        )
+        assertEquals(
+            "the words changed",
+            text.filterNot { it.isWhitespace() },
+            split.joinToString("").filterNot { it.isWhitespace() },
+        )
+    }
+
+    @Test
+    fun `punctuation before the first word joins the sentence it introduces`() {
+        val split = TextChunker.sentences("... And then it began.")
+        assertTrue(
+            "a piece with nothing to say survived: $split",
+            split.all { piece -> piece.any { it.isLetterOrDigit() } },
+        )
+    }
+
+    @Test
+    fun `text that is only punctuation is nothing to read at all`() {
+        // Generating it is the reported failure with extra steps.
+        assertEquals(emptyList<String>(), TextChunker.sentences(". . . ."))
+    }
 }

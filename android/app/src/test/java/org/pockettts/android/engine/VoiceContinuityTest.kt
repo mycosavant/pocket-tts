@@ -81,17 +81,56 @@ class VoiceContinuityTest {
     }
 
     @Test
-    fun `a prompt recorded at another rate stands down rather than splicing`() {
-        // Both halves travel as one array under one declared sample rate, so
-        // concatenating 16 kHz speech onto a 24 kHz prompt would play one of
-        // them at the wrong speed and condition the model on it.
-        val prompt = voice(seconds = 4f, sampleRate = 16_000)
+    fun `a prompt at another rate is carried anyway, with the tail resampled`() {
+        // This guard used to disable the feature outright, and the stock
+        // prompts are not recorded at the rate the model generates at - so on a
+        // real device it turned the whole thing off silently while the
+        // per-sentence splitting it pays for went on happening.
+        val prompt = voice(seconds = 4f, sampleRate = 48_000)
         val continuity = VoiceContinuity(prompt, outputSampleRate = rate)
 
-        assertFalse("spliced across a rate mismatch", continuity.usable)
+        assertTrue("stood down instead of resampling", continuity.usable)
+        continuity.record(FloatArray(rate) { -1f })
+        assertTrue("nothing was carried", continuity.hasContext)
+
+        val reference = continuity.reference()
+        assertTrue(
+            "the reference is no longer than the prompt, so nothing was added",
+            reference.size > 0,
+        )
+        assertEquals("the prompt is not at the head", 0.5f, reference.first(), 0f)
+        assertEquals("the recent audio is not at the tail", -1f, reference.last(), 0.01f)
+    }
+
+    @Test
+    fun `resampling changes the length by the ratio of the rates, not the content`() {
+        val continuity = VoiceContinuity(voice(seconds = 1f), rate)
+        val source = FloatArray(1000) { 0.25f }
+
+        val up = continuity.resample(source, from = 24_000, to = 48_000)
+        assertEquals(2000, up.size)
+        assertEquals("a constant signal did not survive upsampling", 0.25f, up[500], 1e-6f)
+
+        val down = continuity.resample(source, from = 48_000, to = 24_000)
+        assertEquals(500, down.size)
+        assertEquals("a constant signal did not survive downsampling", 0.25f, down[250], 1e-6f)
+
+        assertArrayEquals(
+            "equal rates copied instead of passing through",
+            source,
+            continuity.resample(source, from = rate, to = rate),
+            0f,
+        )
+    }
+
+    @Test
+    fun `a missing rate is the only thing that stands down`() {
+        val prompt = voice(seconds = 4f, sampleRate = 0)
+        val continuity = VoiceContinuity(prompt, outputSampleRate = rate)
+
+        assertFalse(continuity.usable)
         continuity.record(FloatArray(rate) { -1f })
         assertFalse(continuity.hasContext)
-        assertArrayEquals(prompt.samples, continuity.reference(), 0f)
     }
 
     @Test
