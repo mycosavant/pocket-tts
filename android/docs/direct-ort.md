@@ -4,6 +4,13 @@ A scope, not a plan of record. Nothing here is built. It exists so the decision
 to build it — or not to — is made against what is actually in the model bundle
 rather than against a guess.
 
+This is the Android-shaped version of the question: Kotlin driving
+`OrtSession.run` in this app. `owning-the-pipeline.md` asks the cross-platform
+version — whether the thing worth owning is a Rust core shared by this app, the
+Obsidian plugin and a Termux CLI — and reaches a different answer about *where*
+the code should live. Everything below about the bundle's contents and the frame
+loop holds either way; it is the same graphs and the same arithmetic.
+
 ## Why this comes up
 
 sherpa-onnx has been a good deal. It gave this app a working Pocket TTS in an
@@ -16,9 +23,19 @@ through D8's lambda desugaring, once through R8's inlining. Both were found by
 reading a `dexdump` of the artefact, and both are now guarded in CI, but the
 class of failure is inherent to resolving a Kotlin method from native code by
 its exact descriptor. Beyond that, everything the C++ decides is a thing this app
-cannot decide: how text is split, what the tokenizer does with a URL, how many
-flow steps a frame gets — that last one only became reachable because
+cannot decide: what the tokenizer does with a URL, how text is prepared, how
+many flow steps a frame gets — that last one only became reachable because
 `GenerationConfig` happens to expose it.
+
+**One of those has since moved.** How text is split turned out to be reachable
+too, through the same `extra` map: `max_char_in_sentence` and
+`min_char_in_sentence` are read out of it, and setting both above
+`TextChunker`'s cap stops the C++ re-splitting a chunk into sentences and
+generating each one independently. That was the single largest audible defect
+this app had, and it was fixed from the caller's side in four lines. Which is
+the strongest evidence yet for the last entry under *What would make this not
+worth doing*: the control argument keeps shrinking as the `extra` map is read
+more carefully.
 
 ## What is actually in the bundle
 
@@ -99,8 +116,11 @@ in C++.
 `export_model_state` suggests warmed states could be shipped instead of WAVs,
 which would delete the encode from first-read latency entirely.
 
-**Sentence splitting.** Already ours (`TextChunker`), but the reference splits on
-a token budget of 50, not on characters — worth reconciling.
+**Sentence splitting.** Already ours (`TextChunker`), and now actually honoured:
+the `extra` map's two sentence-length bounds stop sherpa-onnx re-splitting what
+`TextChunker` produced. The reference splits on a token budget of 50 rather than
+on characters — worth reconciling, and cheaper to reconcile now that only one
+splitter is running.
 
 ## What it costs
 
@@ -118,10 +138,12 @@ a token budget of 50, not on characters — worth reconciling.
 
 Not by argument. In this order:
 
-1. **Measure first.** The decode-steps slider and `Timings` are already shipped.
-   If Pocket TTS through sherpa-onnx is comfortably faster than real time on the
-   phone, the performance argument for a port is dead and only the control
-   argument remains.
+1. **Measure first.** The decode-steps slider and `Timings` are already shipped,
+   and each chunk trace line now carries `first=NNNms`. If Pocket TTS through
+   sherpa-onnx is comfortably faster than real time on the phone, the
+   performance argument for a port is dead and only the control argument
+   remains. *Partly answered:* generation runs at about 1.12x real time on the
+   owner's device with a stock chunk, so it keeps up, with little margin.
 2. **Build the tokenizer alone**, offline, and diff it against sherpa-onnx's
    tokenisation of a few thousand sentences. It is the highest-risk piece and the
    cheapest to abandon. If it does not agree, stop here.
@@ -133,8 +155,10 @@ Not by argument. In this order:
 
 ## What would make this not worth doing
 
-- sherpa-onnx exposing what we want anyway. It already exposes `numSteps`; the
-  gap is narrower than it looks.
+- sherpa-onnx exposing what we want anyway. It exposes `numSteps`,
+  `temperature`, `seed`, and — as of the splitting fix — both sentence-length
+  bounds. The gap is narrower than it looks, and it has narrowed twice since
+  this was written.
 - The tokenizer failing to agree. Everything downstream is arithmetic; that part
   is judgement encoded in a file we do not have.
 - Real-time factor on the device coming back comfortable. Control is a weaker
