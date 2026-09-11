@@ -49,15 +49,24 @@ object Reader {
      * the state went Idle - which broke every time the state passed through
      * Idle on its way from one utterance to the next.
      */
-    enum class Source {
+    enum class Source(
+        /**
+         * How this source is named in [VoiceTrace].
+         *
+         * The trace called every in-app read "[reader]" regardless of who asked,
+         * which made it useless for the one question it was reached for: whether
+         * the read under investigation was the broadcast or the scratchpad.
+         */
+        val traceName: String,
+    ) {
         /** Text selected in another app, or shared in. */
-        Selection,
+        Selection("selection"),
 
         /** The Speak button, or a selection inside the scratchpad. */
-        Scratchpad,
+        Scratchpad("scratchpad"),
 
         /** Another app driving the system text-to-speech engine. */
-        System,
+        System("system"),
 
         /**
          * A coding agent or script, over [org.pockettts.android.SpeakReceiver].
@@ -69,7 +78,7 @@ object Reader {
          * trace that calls it a selection sends the search somewhere there is
          * nothing to find.
          */
-        Agent,
+        Agent("agent"),
     }
 
     sealed interface State {
@@ -517,7 +526,7 @@ object Reader {
             val engine = engines.create(context) { fraction ->
                 _state.value = State.Preparing(id, source, fraction)
             }
-            engine.useVoice(voiceOverride ?: settings.voiceId)
+            engine.useVoice(voiceOverride ?: settings.voiceId, source.traceName)
             val prepared = Utterance(
                 id = id,
                 turn = EngineTurn.take(),

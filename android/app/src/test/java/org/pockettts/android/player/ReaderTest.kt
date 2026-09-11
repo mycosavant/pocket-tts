@@ -103,6 +103,32 @@ class ReaderTest {
     }
 
     @Test
+    fun `the trace is told which source asked, not just that the reader did`() = runBlocking {
+        // Every in-app read used to reach VoiceTrace as "[reader]", whoever
+        // asked. That is fine until a read goes wrong with no window in front
+        // of it, at which point the only question is whether the trace on
+        // screen belongs to the broadcast or to the scratchpad - and it could
+        // not say.
+        readToEnd(source = Reader.Source.Agent)
+        assertEquals("agent", engine.caller)
+
+        readToEnd(source = Reader.Source.Scratchpad)
+        assertEquals("scratchpad", engine.caller)
+
+        readToEnd(source = Reader.Source.Selection)
+        assertEquals("selection", engine.caller)
+    }
+
+    @Test
+    fun `every source has a distinct trace name`() {
+        // Two sources sharing a name is the same bug as all of them sharing
+        // one, just harder to notice.
+        val names = Reader.Source.entries.map { it.traceName }
+        assertEquals(names.size, names.toSet().size)
+        assertTrue("a blank trace name names nothing", names.none { it.isBlank() })
+    }
+
+    @Test
     fun `a finished read is distinguishable from one that never started`() = runBlocking {
         assertEquals(Reader.State.Idle, Reader.state.value)
         readToEnd()

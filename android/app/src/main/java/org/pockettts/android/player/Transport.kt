@@ -4,7 +4,9 @@ import android.content.Context
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.os.Bundle
 import androidx.annotation.VisibleForTesting
+import org.pockettts.android.R
 import org.pockettts.android.engine.Settings
 
 /**
@@ -24,7 +26,7 @@ import org.pockettts.android.engine.Settings
  * Framework `MediaSession` rather than a support library: everything used here
  * has been in the platform since API 21 and this app is at 26.
  */
-class Transport(context: Context) {
+class Transport(private val context: Context) {
 
     private val settings = Settings(context)
     private val session = MediaSession(context, TAG)
@@ -49,6 +51,16 @@ class Transport(context: Context) {
         override fun onSkipToNext() { Reader.skipForward() }
         override fun onSkipToPrevious() { Reader.skipBack() }
         override fun onStop() { Reader.stop() }
+
+        // The system player draws standard actions it has a button for, and
+        // ACTION_STOP is not one of them - so a read started from the broadcast
+        // offered back, pause and forward and no way to end it short of waiting
+        // it out or finding the app. A custom action is the supported way to
+        // put a fourth button there, and it lands on the same Reader.stop as
+        // the sheet's own Stop.
+        override fun onCustomAction(action: String, extras: Bundle?) {
+            if (action == ACTION_STOP) Reader.stop()
+        }
     }
 
     init {
@@ -67,12 +79,7 @@ class Transport(context: Context) {
                 // progress bar and a clock that both lie.
                 .build(),
         )
-        session.setPlaybackState(
-            PlaybackState.Builder()
-                .setActions(ACTIONS)
-                .setState(playbackStateOf(state), PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
-                .build(),
-        )
+        session.setPlaybackState(playbackState(context, state))
     }
 
     fun release() {
@@ -82,6 +89,9 @@ class Transport(context: Context) {
 
     companion object {
         private const val TAG = "PocketTTS"
+
+        /** The custom action id for Stop; see [callback]. */
+        const val ACTION_STOP = "org.pockettts.android.transport.STOP"
 
         /** How much of the text the system player shows as the title. */
         private const val TITLE_CHARS = 80
@@ -101,6 +111,31 @@ class Transport(context: Context) {
          * first seconds of a read, and a player that says it is playing during
          * a silence is reporting a fault that is not there.
          */
+        /**
+         * The whole published state, not just its integer.
+         *
+         * Built here rather than inline so a test can read what was published
+         * without a live session router - the same reason [playbackStateOf] is
+         * a function. What a test needs to see is the custom action: the system
+         * player has buttons for play, pause and the two skips and nothing
+         * else, so ACTION_STOP in the mask below buys no button at all, and a
+         * read started from the broadcast had no way to be ended from the
+         * shade.
+         */
+        @VisibleForTesting
+        fun playbackState(context: Context, state: Reader.State): PlaybackState =
+            PlaybackState.Builder()
+                .setActions(ACTIONS)
+                .addCustomAction(
+                    PlaybackState.CustomAction.Builder(
+                        ACTION_STOP,
+                        context.getString(R.string.stop),
+                        R.drawable.ic_stop,
+                    ).build(),
+                )
+                .setState(playbackStateOf(state), PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
+                .build()
+
         fun playbackStateOf(state: Reader.State): Int = when {
             state is Reader.State.Preparing -> PlaybackState.STATE_BUFFERING
             state is Reader.State.Speaking && state.paused -> PlaybackState.STATE_PAUSED

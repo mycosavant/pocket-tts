@@ -56,6 +56,25 @@ class MetricsTest {
     }
 
     @Test
+    fun `whether the read got its foreground service is reported`() {
+        // The refusal was a Log.w, and a phone has no logcat within reach - so
+        // a read that played with no notification and no controls looked like a
+        // missing feature rather than a refused background start.
+        assertTrue(
+            "says nothing about the playback service before a read",
+            Metrics.report().contains("playback service: not started yet"),
+        )
+
+        Metrics.playbackProtection = "refused (ForegroundServiceStartNotAllowedException) - no controls"
+        val report = Metrics.report()
+        assertTrue("the reason is not in the report: $report", report.contains("refused"))
+        assertTrue(
+            "the report does not name the service: $report",
+            report.contains("playback service:"),
+        )
+    }
+
+    @Test
     fun `underruns are only credible once something has been read`() {
         // Zero underruns before a single utterance is not a measurement.
         Metrics.underruns = 0

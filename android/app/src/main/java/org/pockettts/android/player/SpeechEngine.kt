@@ -20,8 +20,14 @@ interface SpeechEngine {
 
     val sampleRate: Int
 
-    /** Loads [voiceId], falling back to the default voice if it cannot be found. */
-    suspend fun useVoice(voiceId: String)
+    /**
+     * Loads [voiceId], falling back to the default voice if it cannot be found.
+     *
+     * [caller] names who asked, for the voice trace - see
+     * [Reader.Source.traceName]. It travels with the voice rather than being
+     * held on the engine because the engine is shared and the caller is not.
+     */
+    suspend fun useVoice(voiceId: String, caller: String)
 
     /**
      * Synthesises [text], handing samples to [onAudio] as they are produced.
