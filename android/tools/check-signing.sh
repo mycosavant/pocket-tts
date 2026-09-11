@@ -36,23 +36,44 @@ apksigner="$(ls -1 "$sdk"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -
 
 # --print-certs verifies as well as prints, so a corrupt or unsigned APK fails
 # here rather than reaching the comparison with an empty digest.
-certs="$("$apksigner" verify --print-certs "$apk")"
-actual="$(printf '%s\n' "$certs" | sed -n 's/^Signer #1 certificate SHA-256 digest: *//p' | tr 'A-Z' 'a-z')"
+if ! certs="$("$apksigner" verify --print-certs "$apk" 2>&1)"; then
+    echo "FAIL: $(basename "$apk") did not verify" >&2
+    printf '%s\n' "$certs" >&2
+    exit 1
+fi
 
-if [ -z "$actual" ]; then
+# Matched on the part of the line that every apksigner agrees on. How it
+# labels a signer is not stable across build-tools releases - 35 writes
+# "Signer #1 certificate SHA-256 digest:", 36 writes "V2 Signer: certificate
+# SHA-256 digest:" and names each signature scheme separately - and pinning one
+# of those spellings made this fail on a runner against a correctly signed APK,
+# which is the worst way for a check to be wrong.
+#
+# Every scheme signs with the same certificate here, so they collapse to one
+# digest; if a future key rotation ever made them differ, each is compared and
+# the odd one out is what gets reported.
+digests="$(
+    printf '%s\n' "$certs" \
+        | sed -n 's/.*certificate SHA-256 digest: *\([0-9a-fA-F]\{64\}\).*/\1/p' \
+        | tr 'A-Z' 'a-z' \
+        | sort -u
+)"
+
+if [ -z "$digests" ]; then
     echo "FAIL: $(basename "$apk") reports no signer certificate" >&2
     printf '%s\n' "$certs" >&2
     exit 1
 fi
 
-if [ "$actual" != "$EXPECTED" ]; then
+unexpected="$(printf '%s\n' "$digests" | grep -v -x "$EXPECTED" || true)"
+if [ -n "$unexpected" ]; then
     echo "FAIL: $(basename "$apk") is signed by an unexpected key" >&2
     echo "      expected $EXPECTED" >&2
-    echo "      actual   $actual" >&2
+    printf '      actual   %s\n' $unexpected >&2
     echo "      This build cannot be installed over any other, and a phone that" >&2
     echo "      kept its app data will refuse it outright. Check that" >&2
     echo "      app/debug.keystore is present and that signingConfigs points at it." >&2
     exit 1
 fi
 
-echo "OK: $(basename "$apk") is signed by the committed debug key ($actual)"
+echo "OK: $(basename "$apk") is signed by the committed debug key ($EXPECTED)"
