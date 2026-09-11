@@ -467,10 +467,23 @@ What that leaves is one restart per chunk instead of one per sentence, which is
 also what makes carrying the voice between chunks worth a second look rather
 than the workaround for sherpa's splitting that it started life as.
 
-Other differences from the reference, none of them yet measured on a device:
-five flow-decoding steps here against the reference's one; a seed pinned to a
-constant here against a fresh draw there; the `english_2026-01` bundle here
-against `english_2026-04` there. The temperature is 0.3 in both.
+On a device, that change removed almost all of the clipped first syllable, at
+both step counts. **And one flow-decoding step was then reported closer to the
+same model on a desktop** - "maybe a little more expressive, or more
+inflection" - so the default follows the reference's one rather than
+sherpa-onnx's five. Fewer steps is also less work per frame, which sits oddly
+beside the same report calling it a touch slower to the first word; the `first=`
+figure in the trace is what settles that, and chunk timings on that device move
+by about 90 ms between identical runs anyway.
+
+Two differences from the reference remain. The seed is pinned to a constant here
+against a fresh draw there. And the bundle is `english_2026-01` here against
+`english_2026-04` there - which is not a version number so much as a different
+package: sherpa-onnx's bundle carries a Mimi *encoder*, and the reference's does
+not, because its voices are precomputed embeddings from
+`kyutai/pocket-tts-without-voice-cloning`. The encoder is what turns a wav
+somebody recorded into a voice, so that bundle cannot clone one. The temperature
+is 0.3 in both.
 
 ## What the seed could not fix
 
