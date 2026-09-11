@@ -40,7 +40,7 @@ class PocketTtsEngine(
     ): Boolean {
         val loaded = voice ?: resolve(VoiceCatalog.DEFAULT_VOICE_ID).also { voice = it }
         // Read per call rather than held, so moving a slider changes the next
-        // sentence rather than the next read.
+        // chunk rather than the next read.
         return tts.synthesize(
             text,
             loaded,

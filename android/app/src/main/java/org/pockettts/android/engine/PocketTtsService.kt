@@ -192,11 +192,9 @@ class PocketTtsService : TextToSpeechService() {
                 val speed = (request.speechRate / 100f)
                     .coerceIn(Settings.MIN_SPEED, Settings.MAX_SPEED)
                 val steps = settings.decodeSteps
-                // The same speaker draw the in-app reader uses. This path had
-                // no continuity of any kind, so it is the one where a voice
-                // wandering per sentence was worst - and it is the path most
-                // people spend their day in, since Select to Speak and reader
-                // apps all arrive here.
+                // The same speaker draw the in-app reader uses - and this is
+                // the path most people spend their day in, since Select to
+                // Speak and reader apps all arrive here.
                 val temperature = settings.temperature
                 val seed = settings.voiceSeed
 
@@ -210,7 +208,14 @@ class PocketTtsService : TextToSpeechService() {
                     // and it costs one call - the offsets are only meaningful
                     // because the text above is passed through unrewritten.
                     callback.rangeStart(chunk.start, chunk.end, 0)
-                    val completed = engine.synthesize(chunk.text, voice, speed, steps, temperature, seed) { samples ->
+                    val completed = engine.synthesize(
+                        chunk.text,
+                        voice,
+                        speed,
+                        steps,
+                        temperature,
+                        seed,
+                    ) { samples ->
                         val giveUp = stopRequested.get() || EngineTurn.superseded(turn)
                         if (giveUp) false else deliver(callback, samples, maxBytes)
                     }

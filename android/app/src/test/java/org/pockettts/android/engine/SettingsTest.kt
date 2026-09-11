@@ -25,11 +25,14 @@ class SettingsTest {
     private val settings = Settings(ApplicationProvider.getApplicationContext<Context>())
 
     @Test
-    fun `decode steps default to what has been shipping, not to a new guess`() {
-        // Changing the default silently changes how every existing install
-        // sounds. The knob exists so a device can answer the question; until it
-        // does, the answer stays the one that has been in use.
-        assertEquals(5, settings.decodeSteps)
+    fun `decode steps default to the reference implementation's one, not sherpa's five`() {
+        // This asserted 5 and said so: changing the default silently changes
+        // how every existing install sounds, so the answer stayed the one in
+        // use until a device answered. A device has now answered - one step was
+        // reported closer to the same model on a desktop, and no worse - and
+        // the reference implementation uses one, so the tripwire moves rather
+        // than being worked around.
+        assertEquals(1, settings.decodeSteps)
         assertEquals(Settings.DEFAULT_DECODE_STEPS, settings.decodeSteps)
     }
 

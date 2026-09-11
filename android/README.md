@@ -423,6 +423,119 @@ Select to Speak or Chrome first bound, and changing the voice here did nothing
 for them until they were force-stopped. The engine now advertises one alias
 voice, `selected`, resolved on each request.
 
+## The engine splits what has already been split
+
+Measured against a reference implementation of this same model - a Rust adapter
+over ONNX Runtime 1.23.2, in
+[speech-kit-obsidian-plugin](https://github.com/mycosavant/speech-kit-obsidian-plugin)
+(`native/src/adapters/pocket_tts.rs`) - the single biggest difference is not a
+parameter. It is that the reference **never restarts**:
+
+```rust
+fn synthesize(&mut self, text: &str, ...) -> Result<SynthesisPcm, SynthesisError> {
+    Ok(SynthesisPcm { samples: self.generate_chunk(text, voice_path, cancellation)?, ... })
+}
+```
+
+The whole text goes into one autoregressive loop, which runs until the EOS logit
+fires and a few frames after it, and the latents are then Mimi-decoded in
+blocks. There is no sentence splitting anywhere in it.
+
+sherpa-onnx does the opposite. `SplitByPunctuation` cuts on `.!?`,
+`MergeShortSentences` re-accumulates to a 30-character floor, and each resulting
+sentence is an independent generation with its own onset and its own ending,
+knowing nothing of what came before. That is where the seams come from, and it
+is why a paragraph here has never sounded like the same paragraph elsewhere:
+sentences run into each other and first syllables sound clipped.
+
+Both bounds are caller-configurable through the same `extra` map that already
+carries the temperature and the seed:
+
+```cpp
+int32_t max_char_in_sentence = gen_config.GetExtraInt("max_char_in_sentence", 200);
+int32_t min_char_in_sentence = gen_config.GetExtraInt("min_char_in_sentence", 30);
+```
+
+So both are set above `TextChunker`'s 400-character maximum, and a chunk is
+generated whole. This is not a new policy - the text was already cut at sentence
+boundaries, at a size chosen for time-to-first-audio - it is declining to have
+that work undone. A chunk is comfortably inside the generation's own `max_frames`
+cap of 500 frames: 400 characters is roughly 28 seconds of speech at the model's
+frame rate.
+
+What that leaves is one restart per chunk instead of one per sentence.
+
+On a device, that change removed almost all of the clipped first syllable, at
+both step counts. **And one flow-decoding step was then reported closer to the
+same model on a desktop** - "maybe a little more expressive, or more
+inflection" - so the default follows the reference's one rather than
+sherpa-onnx's five. Fewer steps is also less work per frame, which sits oddly
+beside the same report calling it a touch slower to the first word; the `first=`
+figure in the trace is what settles that, and chunk timings on that device move
+by about 90 ms between identical runs anyway.
+
+Two differences from the reference remain. The seed is pinned to a constant here
+against a fresh draw there. And the bundle is `english_2026-01` here against
+`english_2026-04` there - which is not a version number so much as a different
+package: sherpa-onnx's bundle carries a Mimi *encoder*, and the reference's does
+not, because its voices are precomputed embeddings from
+`kyutai/pocket-tts-without-voice-cloning`. The encoder is what turns a wav
+somebody recorded into a voice, so that bundle cannot clone one. The temperature
+is 0.3 in both.
+
+## What the seed could not fix, and what did
+
+Pinning the seed made every sentence draw the *same speaker*, and that is what
+stopped a paragraph being read by a succession of different people. It left a
+residue, reported from the device as "still drifting, not as bad as before".
+
+The obvious explanation was that nothing generated crosses a sentence boundary,
+so pitch, pace and energy reset at every full stop even when timbre holds. The
+standard fix for chunked neural TTS follows from it: condition what is about to
+be generated on what was just spoken. This repository has now tried that twice
+and deleted it twice, and the second attempt is worth a paragraph because of how
+it failed.
+
+It worked, in the sense that it did what it said. `VoiceContinuity` made each
+chunk's reference the voice prompt plus the last two seconds actually spoken,
+with the prompt always the head - so identity was re-anchored on every
+generation, which is the thing the first attempt got wrong. Three tests pinned
+that. On a device it sounded *slightly worse*, and it cost a Mimi encode of
+50-70 ms per chunk, because sherpa-onnx caches the voice embedding in a 50-entry
+LRU keyed by a hash of the reference samples: a prompt that never changes is
+encoded once per process, and one that moves every chunk is a miss every chunk.
+"The same ten seconds either way" is exactly what makes it not free.
+
+Then the splitting came to light, and the residue turned out not to be a missing
+mechanism at all - it was sherpa-onnx cutting a chunk back into sentences and
+generating each one independently. Four lines of `extra` map fixed it, the
+clipped first syllables went away on the device, and what `VoiceContinuity` had
+been built to work around no longer existed. It was cut before this merged.
+
+Two things it found on the way out are worth keeping in mind, because both were
+found by the device rather than by reasoning:
+
+- **A sample-rate guard made it inert.** The stock prompts are 48 kHz, the model
+  generates at 24 kHz, and the guard stood down on mismatch - silently, on the
+  default voice, while the splitting it paid for went on happening. All of the
+  cost and none of the effect. Two runs went into working out that a prompt hash
+  which never changed meant "disabled" rather than "switched off", which is why
+  the voice trace now says outright what it is doing.
+- **Per-sentence conditioning cost a third of the generation speed.** The
+  reference is re-encoded once per generation call, so splitting a chunk into
+  three sentences pays it three times: 1.12x real time fell to **0.73x**, below
+  playback, at which point gaps are arithmetic rather than bad luck. And it did
+  not even decide what a sentence was, because sherpa-onnx re-splits whatever it
+  is handed - `. . . .`, an ellipsis typed as spaced periods and ordinary in
+  scripture and older prose, still reached the model as a request to speak three
+  bare full stops however carefully this side folded them into their neighbours.
+
+What survived is the instrumentation, which is the part that settled any of it:
+each `[chunk n]` line carries `first=NNNms`, wall clock from asking for a chunk
+to its first sample, so the encode is inside it and the blocking write is not.
+`Metrics.generationRealTimeFactor` cannot see that interval - it is taken on the
+first chunk of a read, which is always a cache hit.
+
 ## Who is actually speaking
 
 `debug/VoiceTrace` records, per read: the voice asked for, the voice found,

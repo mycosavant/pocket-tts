@@ -59,11 +59,28 @@ object VoiceTrace {
         promptHash: Int,
         temperature: Float,
         seed: Int,
+        /**
+         * Milliseconds from asking for this chunk to its first sample, or -1
+         * if it produced none.
+         *
+         * The one number that can see the cost of carrying the voice.
+         * sherpa-onnx caches the encoded voice embedding in a 50-entry LRU
+         * keyed by a hash of the reference samples, so an unchanging prompt is
+         * encoded once per process and a reference that moves every chunk is a
+         * cache miss every chunk. `Metrics.generationRealTimeFactor` cannot
+         * show that: it is measured on the first chunk of a read, and the first
+         * chunk has no context yet in either mode, so its reference is the
+         * plain prompt and always a hit. Timing every chunk here is what turns
+         * "does this cost anything" into an answer.
+         */
+        firstSampleMillis: Long = -1,
     ) {
         val seconds = if (promptRate > 0) promptSamples.toFloat() / promptRate else 0f
+        val latency = if (firstSampleMillis < 0) "" else " first=${firstSampleMillis}ms"
         add(
             "[chunk ${chunk++}] $voiceId prompt=%.2fs hash=%08x temp=%.2f seed=%s"
-                .format(seconds, promptHash, temperature, if (seed < 0) "random" else "$seed"),
+                .format(seconds, promptHash, temperature, if (seed < 0) "random" else "$seed") +
+                latency,
         )
     }
 

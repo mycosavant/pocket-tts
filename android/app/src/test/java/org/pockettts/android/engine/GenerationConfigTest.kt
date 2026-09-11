@@ -2,6 +2,7 @@ package org.pockettts.android.engine
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -45,7 +46,29 @@ class GenerationConfigTest {
     fun `the keys are the ones the engine reads`() {
         // Spelled out rather than referenced, so that renaming a constant
         // cannot quietly rename the key the C++ is looking for.
-        assertEquals(setOf("temperature", "seed"), config().extra?.keys)
+        assertEquals(
+            setOf("temperature", "seed", "max_char_in_sentence", "min_char_in_sentence"),
+            config().extra?.keys,
+        )
+    }
+
+    @Test
+    fun `a chunk is never re-split into sentences by the engine`() {
+        // sherpa-onnx cuts on .!? and generates each sentence independently,
+        // which is where the seams come from - and this text has already been
+        // cut at sentence boundaries by TextChunker, to a size chosen for
+        // time-to-first-audio. Both bounds have to clear the chunker's own
+        // 400-character maximum or a chunk is split again anyway.
+        val extra = config().extra!!
+        val longest = 400
+        assertTrue(
+            "max_char_in_sentence ${extra["max_char_in_sentence"]} does not clear a $longest character chunk",
+            extra["max_char_in_sentence"]!!.toInt() > longest,
+        )
+        assertTrue(
+            "min_char_in_sentence ${extra["min_char_in_sentence"]} would not merge a $longest character chunk back",
+            extra["min_char_in_sentence"]!!.toInt() > longest,
+        )
     }
 
     @Test

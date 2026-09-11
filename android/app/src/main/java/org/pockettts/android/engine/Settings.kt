@@ -36,9 +36,17 @@ class Settings(context: Context) {
      * in `default_parameters.py` - so four fifths of that work may be buying
      * nothing at all, on a phone, per frame.
      *
-     * Which it is cannot be decided from here: it is a quality-against-speed
-     * trade, one side of which is only audible. So it is a slider, and the
-     * default stays at what has been shipping until a device says otherwise.
+     * The device has now said. At one step a listener reported the reading
+     * closer to what the same model does on a desktop - "maybe a little more
+     * expressive, or more inflection" - and no worse in any other respect, so
+     * the default follows the reference rather than sherpa-onnx.
+     *
+     * It should also be cheaper: one Euler step per frame is one evaluation of
+     * the flow graph rather than five. That prediction sits oddly beside the
+     * same report saying it was "a tad slower to first word", which is either
+     * run-to-run variance - chunk timings on that device move by ~90 ms between
+     * identical runs - or something not yet understood. The `first=` figure in
+     * the voice trace measures exactly this and can settle it.
      */
     var decodeSteps: Int
         get() = prefs.getInt(KEY_DECODE_STEPS, DEFAULT_DECODE_STEPS).coerceIn(MIN_STEPS, MAX_STEPS)
@@ -148,8 +156,12 @@ class Settings(context: Context) {
         const val MIN_STEPS = 1
         const val MAX_STEPS = 8
 
-        /** sherpa-onnx's own default, so nothing changes until it is changed. */
-        const val DEFAULT_DECODE_STEPS = 5
+        /**
+         * The reference implementation's value, not sherpa-onnx's five.
+         *
+         * Changed on a device report rather than reasoning; see [decodeSteps].
+         */
+        const val DEFAULT_DECODE_STEPS = 1
 
         const val MIN_TEMPERATURE = 0.1f
         const val MAX_TEMPERATURE = 1.0f

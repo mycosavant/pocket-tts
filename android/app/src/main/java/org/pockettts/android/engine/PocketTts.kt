@@ -90,28 +90,53 @@ class PocketTts private constructor(
     ): Boolean = synthesisLock.withLock {
         withContext(Dispatchers.Default) {
             var completed = true
-            // Recorded here rather than at the call site because this is the
-            // last place the prompt is a real array of samples: everything
-            // upstream is an id, and an id is exactly what has been lying.
-            VoiceTrace.generated(
-                voiceId = voice.id,
-                promptSamples = voice.samples.size,
-                promptRate = voice.sampleRate,
-                promptHash = voice.samples.contentHashCode(),
-                temperature = temperature,
-                seed = seed,
+            val config = generationConfig(
+                voice,
+                speed,
+                numSteps,
+                temperature,
+                seed,
             )
-            val config = generationConfig(voice, speed, numSteps, temperature, seed)
-            tts.generateWithConfigAndCallback(
-                text,
-                config,
-                audioCallback { samples ->
-                    if (onAudio(samples)) true else {
-                        completed = false
-                        false
-                    }
-                },
-            )
+            // Timed from the call to the first sample out of it: the voice
+            // embedding being encoded plus the model's first pass, which is the
+            // wait before a chunk starts and the only interval that moves when
+            // the conditioning does. sherpa-onnx caches the embedding against a
+            // hash of the reference samples, so a prompt that never changes is
+            // encoded once per process and one that moves is a miss every time -
+            // which is what made this figure worth having.
+            val startedAt = System.currentTimeMillis()
+            var firstSampleMillis = -1L
+            try {
+                tts.generateWithConfigAndCallback(
+                    text,
+                    config,
+                    audioCallback { samples ->
+                        if (firstSampleMillis < 0) {
+                            firstSampleMillis = System.currentTimeMillis() - startedAt
+                        }
+                        if (onAudio(samples)) true else {
+                            completed = false
+                            false
+                        }
+                    },
+                )
+            } finally {
+                // Recorded here rather than at the call site because this is
+                // the last place the prompt is a real array of samples:
+                // everything upstream is an id, and an id is exactly what has
+                // been lying. After the generation rather than before it, so
+                // the line can carry what it cost; a finally so a generation
+                // that throws still leaves its breadcrumb.
+                VoiceTrace.generated(
+                    voiceId = voice.id,
+                    promptSamples = voice.samples.size,
+                    promptRate = voice.sampleRate,
+                    promptHash = voice.samples.contentHashCode(),
+                    temperature = temperature,
+                    seed = seed,
+                    firstSampleMillis = firstSampleMillis,
+                )
+            }
             completed
         }
     }
@@ -123,6 +148,18 @@ class PocketTts private constructor(
 
     companion object {
         private const val TAG = "PocketTts"
+
+        /**
+         * A sentence length no chunk can exceed, so none is ever re-split.
+         *
+         * `TextChunker` caps a chunk at 400 characters. This is comfortably
+         * above that and comfortably below the point where the generation's own
+         * `max_frames` cap (500 frames, about 40 seconds at the model's frame
+         * rate) could truncate a chunk: 400 characters is roughly 28 seconds of
+         * speech, so a whole chunk fits inside one generation with room to
+         * spare.
+         */
+        private const val WHOLE_CHUNK = 2000
         private const val MAX_PROMPT_SECONDS = 10f
 
         /**
@@ -175,6 +212,26 @@ class PocketTts private constructor(
             extra = mapOf(
                 "temperature" to temperature.toString(),
                 "seed" to seed.toString(),
+                // Stop sherpa-onnx splitting text this app has already split.
+                //
+                // It cuts on .!? and generates each sentence as an independent
+                // pass, and that is where the seams come from: a paragraph is a
+                // succession of separate generations, each with its own onset
+                // and its own ending, none of them knowing what came before.
+                // The reference implementation of this model does not do that -
+                // it runs one autoregressive pass over the whole text and stops
+                // on EOS - and the difference is audible as sentences that run
+                // into each other and first syllables that sound clipped.
+                //
+                // TextChunker has already cut this text at sentence boundaries,
+                // to a size chosen for time-to-first-audio. Re-splitting it is
+                // redundant work that reopens seams this app has already closed,
+                // so these two ask for a chunk to be left whole: above MAX, so
+                // SplitLongSentence never fires, and above it again for the
+                // merge, so every sentence in the chunk is accumulated back
+                // into one.
+                "max_char_in_sentence" to WHOLE_CHUNK.toString(),
+                "min_char_in_sentence" to WHOLE_CHUNK.toString(),
             ),
         )
 
