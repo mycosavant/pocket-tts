@@ -305,6 +305,63 @@ class ReaderTest {
     }
 
     @Test
+    fun `a queued read waits for the one in front of it`() = runBlocking {
+        // EngineTurn is not this and cannot be made into it: its rule is that
+        // the most recent request wins, so a second read arriving through it
+        // silences the first rather than following it.
+        engine.gate = CompletableDeferred()
+        val first = Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitFor(first, "speaking") { it is Reader.State.Speaking }
+
+        val second = Reader.enqueue(context, "Second passage.", treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitUntil("the second read is queued") { Reader.queued == 1 }
+        // Still the first read's: queuing must not hand the reader over.
+        assertEquals(first, Reader.state.value.utterance)
+
+        engine.gate?.complete(Unit)
+        awaitFor(second, "second finished") { it is Reader.State.Finished }
+        assertEquals(listOf(threeSentences, "Second passage."), engine.spoken)
+    }
+
+    @Test
+    fun `skipping off the end starts what was queued behind it`() = runBlocking {
+        // Skipping forward past the last chunk is an ending like any other, and
+        // it is the one that does not arrive through the job completing - so
+        // the queue has to be advanced by hand or a keen listener strands it.
+        engine.gate = CompletableDeferred()
+        val first = Reader.speak(context, "Only one sentence here.", treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitFor(first, "speaking") { it is Reader.State.Speaking }
+        val second = Reader.enqueue(context, "Second passage.", treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitUntil("the second read is queued") { Reader.queued == 1 }
+        // Parked on the gate rather than merely started, so the skip below
+        // cancels a read that is genuinely mid-chunk.
+        awaitUntil("the first read reached the engine") { engine.spoken.size == 1 }
+
+        Reader.skipForward()
+        awaitUntil("the queued read started") { engine.spoken.size == 2 }
+        engine.gate?.complete(Unit)
+
+        awaitFor(second, "second finished") { it is Reader.State.Finished }
+        assertEquals(listOf("Only one sentence here.", "Second passage."), engine.spoken)
+    }
+
+    @Test
+    fun `stopping drops what was queued as well as what is playing`() = runBlocking {
+        engine.gate = CompletableDeferred()
+        val first = Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitFor(first, "speaking") { it is Reader.State.Speaking }
+        Reader.enqueue(context, "Second passage.", treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitUntil("the second read is queued") { Reader.queued == 1 }
+
+        Reader.stop()
+        engine.gate?.complete(Unit)
+
+        awaitFor(first, "stopped") { it is Reader.State.Stopped }
+        awaitUntil("the reader went idle") { !Reader.isActive }
+        assertFalse("the queued read ran after a stop", engine.spoken.contains("Second passage."))
+    }
+
+    @Test
     fun `blank text finishes instead of leaving the reader hanging`() = runBlocking {
         val id = Reader.speak(context, "   ", treatAsMarkdown = false, source = Reader.Source.Scratchpad)
         awaitFor(id, "finished") { it is Reader.State.Finished }

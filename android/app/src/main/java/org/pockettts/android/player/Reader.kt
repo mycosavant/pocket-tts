@@ -58,6 +58,18 @@ object Reader {
 
         /** Another app driving the system text-to-speech engine. */
         System,
+
+        /**
+         * A coding agent or script, over [org.pockettts.android.SpeakReceiver].
+         *
+         * Neither a paste nor a selection: nobody was looking at this text in
+         * an editor, and there is no screen anywhere that owns the read. It is
+         * told apart from the other two because a read with no window behind
+         * it fails differently - silently, with the phone in a pocket - and a
+         * trace that calls it a selection sends the search somewhere there is
+         * nothing to find.
+         */
+        Agent,
     }
 
     sealed interface State {
@@ -202,6 +214,48 @@ object Reader {
     @Volatile
     private var utterance: Utterance? = null
 
+    /**
+     * An utterance that has been asked for but not started.
+     *
+     * Everything needed to begin a read, held until the one in front of it
+     * ends. Deliberately the arguments to [run] rather than an [Utterance]:
+     * the engine, the voice and the chunking are the expensive half, and
+     * doing them at queue time would load a model for a read that a stop
+     * arriving first means nobody will ever hear.
+     */
+    private class Pending(
+        val id: Long,
+        val context: Context,
+        val text: String,
+        val treatAsMarkdown: Boolean,
+        val voiceOverride: String?,
+        val source: Source,
+    )
+
+    /**
+     * Reads waiting their turn. Only ever touched under [control].
+     *
+     * [EngineTurn] is not this. That arbitrates between the two things that
+     * drive the one model - this reader and the system engine service - and
+     * its rule is that the most recent request wins, which is the opposite of
+     * a queue. It exists so two callers who cannot see each other do not
+     * interleave; this exists so one caller can say "after that one", and
+     * nothing about standing down for a stranger answers that.
+     */
+    private val queue = ArrayDeque<Pending>()
+
+    /**
+     * How many reads are waiting their turn.
+     *
+     * Read without [control], which is safe for what it is used for: a test
+     * waiting for an enqueue to have landed before it does the thing it is
+     * actually testing. Without it every queue test races the dispatch of the
+     * coroutine that does the enqueuing, and races that are usually won are
+     * the ones that fail in CI.
+     */
+    @VisibleForTesting
+    internal val queued: Int get() = queue.size
+
     @Volatile
     private var chunkIndex: Int = 0
 
@@ -253,7 +307,10 @@ object Reader {
             // assertions. That is a whole class of confusing cross-test
             // failures, and it does not belong to the test that reports it.
             scope.coroutineContext.job.children.toList().forEach { it.cancelAndJoin() }
-            control.withLock { stopLocked(ending = null) }
+            control.withLock {
+                queue.clear()
+                stopLocked(ending = null)
+            }
         }
         utterance = null
         currentSource = null
@@ -284,18 +341,108 @@ object Reader {
         VoiceSample.stop()
         scope.launch {
             control.withLock {
+                // A read that replaces what is playing replaces what was going
+                // to play after it too. Queued follow-ups belong to the passage
+                // being abandoned, not to the one taking over.
+                queue.clear()
                 // No terminal state on the way out: this is a handover, not an
                 // ending, and anything watching for "the read is over" would
                 // otherwise tear down and immediately rebuild.
                 stopLocked(ending = null)
-                currentSource = source
-                currentUtterance = id
-                job = scope.launch {
-                    run(appContext, id, text, treatAsMarkdown, voiceOverride, source)
+                startLocked(Pending(id, appContext, text, treatAsMarkdown, voiceOverride, source))
+            }
+        }
+        return id
+    }
+
+    /**
+     * Reads [text] after whatever is playing, rather than instead of it.
+     *
+     * For a caller sending a series of things to hear in order - an agent
+     * handing over one reply while the last is still being read. [speak] would
+     * make each one silence the one before, so a run of them plays only the
+     * last few words of the last.
+     *
+     * With nothing playing this is exactly [speak]; there is no queue to join.
+     *
+     * @return the utterance id, which is allocated now even though the read
+     *   starts later, so a caller can recognise its own read when it arrives.
+     */
+    fun enqueue(
+        context: Context,
+        text: String,
+        treatAsMarkdown: Boolean = true,
+        voiceOverride: String? = null,
+        source: Source = Source.Selection,
+    ): Long {
+        val appContext = context.applicationContext
+        val id = nextUtterance.incrementAndGet()
+        scope.launch {
+            control.withLock {
+                val pending = Pending(id, appContext, text, treatAsMarkdown, voiceOverride, source)
+                if (job?.isActive == true || queue.isNotEmpty()) {
+                    queue.addLast(pending)
+                } else {
+                    VoiceSample.stop()
+                    startLocked(pending)
                 }
             }
         }
         return id
+    }
+
+    /**
+     * Begins [pending]. The caller holds [control] and has stopped whatever
+     * was playing.
+     */
+    private fun startLocked(pending: Pending) {
+        currentSource = pending.source
+        currentUtterance = pending.id
+        val started = scope.launch {
+            run(
+                pending.context,
+                pending.id,
+                pending.text,
+                pending.treatAsMarkdown,
+                pending.voiceOverride,
+                pending.source,
+            )
+        }
+        job = started
+        // Advancing the queue from inside the job would deadlock: a stop holds
+        // `control` while it joins this very job, so the job cannot take the
+        // lock it would need. A completion handler runs after the job is done
+        // and the joiner has been released.
+        //
+        // A non-null cause means cancelled, and a cancel is either a handover
+        // or a stop - both of which have already decided what plays next.
+        started.invokeOnCompletion { cause ->
+            if (cause == null) scope.launch { advance(started) }
+        }
+    }
+
+    /** Starts whatever [finished] was holding up. */
+    private suspend fun advance(finished: Job) {
+        control.withLock {
+            // Somebody took over while the completion handler was in flight;
+            // the queue is theirs now.
+            if (job !== finished) return@withLock
+            // A failure here is almost never about the text - no model, no
+            // voice, no network - so the rest of the queue would fail the same
+            // way. Four more reads that each say nothing but the same error is
+            // not a service to anyone.
+            if (_state.value is State.Failed) {
+                queue.clear()
+                return@withLock
+            }
+            job = null
+            advanceLocked()
+        }
+    }
+
+    /** Starts the next queued read, if there is one. Caller holds [control]. */
+    private fun advanceLocked() {
+        startLocked(queue.removeFirstOrNull() ?: return)
     }
 
     /**
@@ -313,6 +460,11 @@ object Reader {
                 val target = chunkIndex + delta
                 if (target >= current.chunks.size) {
                     stopLocked(ending = State.Finished(current.id, current.source))
+                    // Skipping off the end is an ending like any other, and
+                    // what was queued behind it is still wanted. The cancel
+                    // inside stopLocked means the completion handler will not
+                    // do this for us.
+                    advanceLocked()
                     return@withLock
                 }
                 stopLocked(ending = null)
@@ -503,6 +655,9 @@ object Reader {
     fun stop() {
         scope.launch {
             control.withLock {
+                // Cleared before the early return: a stop with nothing playing
+                // still means "and nothing after it either".
+                queue.clear()
                 val source = currentSource ?: return@withLock
                 stopLocked(ending = State.Stopped(currentUtterance, source))
             }
