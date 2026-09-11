@@ -171,6 +171,18 @@ class PocketTts private constructor(
 
     companion object {
         private const val TAG = "PocketTts"
+
+        /**
+         * A sentence length no chunk can exceed, so none is ever re-split.
+         *
+         * `TextChunker` caps a chunk at 400 characters. This is comfortably
+         * above that and comfortably below the point where the generation's own
+         * `max_frames` cap (500 frames, about 40 seconds at the model's frame
+         * rate) could truncate a chunk: 400 characters is roughly 28 seconds of
+         * speech, so a whole chunk fits inside one generation with room to
+         * spare.
+         */
+        private const val WHOLE_CHUNK = 2000
         private const val MAX_PROMPT_SECONDS = 10f
 
         /**
@@ -239,6 +251,25 @@ class PocketTts private constructor(
             extra = mapOf(
                 "temperature" to temperature.toString(),
                 "seed" to seed.toString(),
+                // Stop sherpa-onnx splitting text this app has already split.
+                //
+                // It cuts on .!? and generates each sentence as an independent
+                // pass, and that is where the seams come from: a paragraph is a
+                // succession of separate generations, each with its own onset
+                // and its own ending, none of them knowing what came before.
+                // The reference implementation of this model does not do that -
+                // it runs one autoregressive pass over the whole text and stops
+                // on EOS - and the difference is audible as sentences that run
+                // into each other and first syllables that sound clipped.
+                //
+                // TextChunker has already cut this text at sentence boundaries,
+                // to a size chosen for time-to-first-audio. Re-splitting it is
+                // redundant work that costs continuity, so these two ask for a
+                // chunk to be left whole: above MAX, so SplitLongSentence never
+                // fires, and above it again for the merge, so every sentence in
+                // the chunk is accumulated back into one.
+                "max_char_in_sentence" to WHOLE_CHUNK.toString(),
+                "min_char_in_sentence" to WHOLE_CHUNK.toString(),
             ),
         )
 

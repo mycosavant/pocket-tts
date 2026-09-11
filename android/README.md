@@ -423,6 +423,55 @@ Select to Speak or Chrome first bound, and changing the voice here did nothing
 for them until they were force-stopped. The engine now advertises one alias
 voice, `selected`, resolved on each request.
 
+## The engine splits what has already been split
+
+Measured against a reference implementation of this same model - a Rust adapter
+over ONNX Runtime 1.23.2, in
+[speech-kit-obsidian-plugin](https://github.com/mycosavant/speech-kit-obsidian-plugin)
+(`native/src/adapters/pocket_tts.rs`) - the single biggest difference is not a
+parameter. It is that the reference **never restarts**:
+
+```rust
+fn synthesize(&mut self, text: &str, ...) -> Result<SynthesisPcm, SynthesisError> {
+    Ok(SynthesisPcm { samples: self.generate_chunk(text, voice_path, cancellation)?, ... })
+}
+```
+
+The whole text goes into one autoregressive loop, which runs until the EOS logit
+fires and a few frames after it, and the latents are then Mimi-decoded in
+blocks. There is no sentence splitting anywhere in it.
+
+sherpa-onnx does the opposite. `SplitByPunctuation` cuts on `.!?`,
+`MergeShortSentences` re-accumulates to a 30-character floor, and each resulting
+sentence is an independent generation with its own onset and its own ending,
+knowing nothing of what came before. That is where the seams come from, and it
+is why a paragraph here has never sounded like the same paragraph elsewhere:
+sentences run into each other and first syllables sound clipped.
+
+Both bounds are caller-configurable through the same `extra` map that already
+carries the temperature and the seed:
+
+```cpp
+int32_t max_char_in_sentence = gen_config.GetExtraInt("max_char_in_sentence", 200);
+int32_t min_char_in_sentence = gen_config.GetExtraInt("min_char_in_sentence", 30);
+```
+
+So both are set above `TextChunker`'s 400-character maximum, and a chunk is
+generated whole. This is not a new policy - the text was already cut at sentence
+boundaries, at a size chosen for time-to-first-audio - it is declining to have
+that work undone. A chunk is comfortably inside the generation's own `max_frames`
+cap of 500 frames: 400 characters is roughly 28 seconds of speech at the model's
+frame rate.
+
+What that leaves is one restart per chunk instead of one per sentence, which is
+also what makes carrying the voice between chunks worth a second look rather
+than the workaround for sherpa's splitting that it started life as.
+
+Other differences from the reference, none of them yet measured on a device:
+five flow-decoding steps here against the reference's one; a seed pinned to a
+constant here against a fresh draw there; the `english_2026-01` bundle here
+against `english_2026-04` there. The temperature is 0.3 in both.
+
 ## What the seed could not fix
 
 Pinning the seed made every sentence draw the *same speaker*, and that is what
