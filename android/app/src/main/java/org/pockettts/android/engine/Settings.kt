@@ -75,6 +75,31 @@ class Settings(context: Context) {
         get() = prefs.getBoolean(KEY_STEADY_VOICE, true)
         set(value) = prefs.edit { putBoolean(KEY_STEADY_VOICE, value) }
 
+    /**
+     * Whether each sentence is conditioned on the end of the one before it.
+     *
+     * The fixed seed above makes every sentence draw the *same speaker*. It
+     * cannot make them sound like one continuous delivery, because nothing
+     * generated crosses a sentence boundary: each is an independent generation
+     * from the same prompt, so pitch, pace and energy reset at every full stop.
+     * On a paragraph that is audible as a voice that keeps resettling.
+     *
+     * With this on, the reference for each sentence is the voice prompt plus
+     * the last couple of seconds actually spoken - see [VoiceContinuity]. The
+     * prompt never leaves it, so identity cannot drift the way it did when this
+     * was last attempted.
+     *
+     * Off by default, and deliberately: it makes the model re-encode a
+     * reference once per sentence rather than once per chunk, and if that
+     * pushes generation below real time the reading gains gaps, which is a
+     * worse fault than the one it fixes. The Timings screen reports generation
+     * speed, so this is a question the device can answer - turn it on, read a
+     * few paragraphs, and compare.
+     */
+    var continueVoiceAcrossSentences: Boolean
+        get() = prefs.getBoolean(KEY_VOICE_CONTINUITY, false)
+        set(value) = prefs.edit { putBoolean(KEY_VOICE_CONTINUITY, value) }
+
     /** The seed to hand the generator, or -1 for a fresh draw each sentence. */
     val voiceSeed: Int get() = if (steadyVoice) FIXED_SEED else RANDOM_SEED
 
@@ -195,6 +220,7 @@ class Settings(context: Context) {
         private const val KEY_CODE_BLOCKS = "speak_code_blocks"
         private const val KEY_SELECTION_MARKDOWN = "selection_markdown"
         private const val KEY_STEADY_VOICE = "steady_voice"
+        private const val KEY_VOICE_CONTINUITY = "voice_continuity"
         private const val KEY_TEMPERATURE = "temperature"
         private const val KEY_SCRATCHPAD = "scratchpad"
         private const val KEY_GLASS_ALPHA = "glass_alpha"

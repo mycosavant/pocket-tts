@@ -4,6 +4,7 @@ import android.content.Context
 import org.pockettts.android.engine.ModelManager
 import org.pockettts.android.engine.PocketTts
 import org.pockettts.android.engine.Settings
+import org.pockettts.android.engine.VoiceContinuity
 import org.pockettts.android.engine.VoiceCatalog
 import org.pockettts.android.debug.VoiceTrace
 
@@ -16,6 +17,15 @@ class PocketTtsEngine(
     private val settings = Settings(context)
 
     private var voice: PocketTts.LoadedVoice? = null
+
+    /**
+     * The voice being carried between sentences, for as long as this engine is.
+     *
+     * One of these per engine, and the reader builds an engine per utterance -
+     * so continuity spans a whole read and nothing leaks from the last one into
+     * the next.
+     */
+    private var continuity: VoiceContinuity? = null
 
     override val sampleRate: Int get() = tts.sampleRate
 
@@ -31,6 +41,7 @@ class PocketTtsEngine(
     override suspend fun useVoice(voiceId: String, caller: String) {
         this.caller = caller
         voice = resolve(voiceId)
+        continuity = null
     }
 
     override suspend fun synthesize(
@@ -40,7 +51,14 @@ class PocketTtsEngine(
     ): Boolean {
         val loaded = voice ?: resolve(VoiceCatalog.DEFAULT_VOICE_ID).also { voice = it }
         // Read per call rather than held, so moving a slider changes the next
-        // sentence rather than the next read.
+        // sentence rather than the next read. The continuity is the exception:
+        // it is the read's own accumulated context, so turning the setting off
+        // mid-read stops adding to it rather than discarding what is there.
+        val carried = if (settings.continueVoiceAcrossSentences) {
+            continuity ?: VoiceContinuity(loaded, tts.sampleRate).also { continuity = it }
+        } else {
+            null
+        }
         return tts.synthesize(
             text,
             loaded,
@@ -48,6 +66,7 @@ class PocketTtsEngine(
             settings.decodeSteps,
             settings.temperature,
             settings.voiceSeed,
+            carried,
             onAudio,
         )
     }

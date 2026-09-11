@@ -423,6 +423,52 @@ Select to Speak or Chrome first bound, and changing the voice here did nothing
 for them until they were force-stopped. The engine now advertises one alias
 voice, `selected`, resolved on each request.
 
+## What the seed could not fix
+
+Pinning the seed made every sentence draw the *same speaker*, and that is what
+stopped a paragraph being read by a succession of different people. It left a
+residue, reported from the device as "still drifting, not as bad as before", and
+the residue has a different cause: nothing generated crosses a sentence
+boundary. Each sentence is an independent generation from the same prompt, so
+timbre holds - the seed sees to that - while pitch, pace and energy reset at
+every full stop. Over several paragraphs that is audible as a voice that keeps
+resettling.
+
+The standard fix for chunked neural TTS is to condition each sentence on what
+was just spoken. This repository has tried that once before and deleted it, for
+two reasons worth keeping in view:
+
+- **It acted at chunk boundaries.** A chunk is two or three sentences, and
+  sherpa-onnx re-splits whatever it is handed on `.!?` and generates each
+  sentence separately - so conditioning per chunk skipped most of the seams it
+  existed to close. `TextChunker.sentences` exists so this can act per sentence,
+  which means `PocketTts.synthesize` does the splitting itself when continuity
+  is on, because a reference is chosen once per generation call.
+- **It replaced the voice prompt with generated audio and never went back.** A
+  long read therefore walked away from the voice that was chosen, which is a
+  mechanism for producing "it isn't the selected voice" - a worse complaint than
+  the one it set out to fix. In `VoiceContinuity` the prompt is always the head
+  of the reference and only the tail is recent speech, so identity is
+  re-anchored on every sentence and only the delivery is inherited.
+  `VoiceContinuityTest` fails against the old behaviour.
+
+The two halves are concatenated into one array under one declared sample rate,
+so a prompt recorded at a rate the model does not generate at would play one
+half at the wrong speed. That case stands down to the prompt alone rather than
+splicing.
+
+**It is off by default, and that is a measurement rather than a preference.** It
+makes the model re-encode a reference once per sentence instead of once per
+chunk. If that pushes generation below real time the reading gains gaps, which
+is a worse fault than the one being fixed. The Timings screen already reports
+generation speed against a known warm baseline of about 1.17x on the device this
+was written for, so the switch is there to be turned on, listened to, and
+measured - and the default moved once there is a number rather than an argument.
+
+The voice trace is the outward sign that it is working: the prompt hash changes
+per sentence when the voice is being carried and is identical every time when it
+is not.
+
 ## Who is actually speaking
 
 `debug/VoiceTrace` records, per read: the voice asked for, the voice found,

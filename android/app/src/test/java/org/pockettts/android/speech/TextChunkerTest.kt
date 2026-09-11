@@ -71,4 +71,45 @@ class TextChunkerTest {
         val rejoined = TextChunker.chunk(text).joinToString(" ") { it.text }
         assertEquals("One. Two. Three. Four. Five.", rejoined)
     }
+
+    @Test
+    fun `sentences are split where sentences end, not where chunks do`() {
+        // The distinction the voice-continuity work turns on: a chunk is two or
+        // three sentences, and sherpa-onnx re-splits on sentence punctuation
+        // and generates each one independently. Anything acting per chunk acts
+        // on every third seam.
+        val text = "One first thing. Two second thing! Three third thing? Four."
+        assertEquals(
+            listOf(
+                "One first thing.",
+                "Two second thing!",
+                "Three third thing?",
+                "Four.",
+            ),
+            TextChunker.sentences(text),
+        )
+    }
+
+    @Test
+    fun `a passage with no sentence end is one sentence`() {
+        assertEquals(listOf("no punctuation here"), TextChunker.sentences("no punctuation here"))
+    }
+
+    @Test
+    fun `blank text yields no sentences rather than one empty one`() {
+        // An empty piece handed to the generator is a generation that produces
+        // nothing and costs a model call to find out.
+        assertEquals(emptyList<String>(), TextChunker.sentences("   \n  "))
+    }
+
+    @Test
+    fun `every sentence of a chunk is accounted for, with nothing invented`() {
+        val text = "First one here. Second one here. And a third, with a comma."
+        val split = TextChunker.sentences(text)
+        assertEquals(
+            "splitting changed the words",
+            text.filterNot { it.isWhitespace() },
+            split.joinToString("").filterNot { it.isWhitespace() },
+        )
+    }
 }

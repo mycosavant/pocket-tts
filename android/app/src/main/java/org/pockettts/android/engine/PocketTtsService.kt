@@ -203,6 +203,16 @@ class PocketTtsService : TextToSpeechService() {
                 callback.start(engine.sampleRate, AudioFormat.ENCODING_PCM_16BIT, 1)
                 val maxBytes = callback.maxBufferSize
 
+                // One per request, so a passage read through Select to Speak
+                // carries its own voice from sentence to sentence and nothing
+                // survives into whatever asks next. This path had no continuity
+                // of any kind, and it is the one most days are spent in.
+                val carried = if (settings.continueVoiceAcrossSentences) {
+                    VoiceContinuity(voice, engine.sampleRate)
+                } else {
+                    null
+                }
+
                 for (chunk in TextChunker.chunk(speakable)) {
                     if (stopRequested.get() || EngineTurn.superseded(turn)) break
                     // Where in the request this chunk is, so the caller can
@@ -210,7 +220,15 @@ class PocketTtsService : TextToSpeechService() {
                     // and it costs one call - the offsets are only meaningful
                     // because the text above is passed through unrewritten.
                     callback.rangeStart(chunk.start, chunk.end, 0)
-                    val completed = engine.synthesize(chunk.text, voice, speed, steps, temperature, seed) { samples ->
+                    val completed = engine.synthesize(
+                        chunk.text,
+                        voice,
+                        speed,
+                        steps,
+                        temperature,
+                        seed,
+                        carried,
+                    ) { samples ->
                         val giveUp = stopRequested.get() || EngineTurn.superseded(turn)
                         if (giveUp) false else deliver(callback, samples, maxBytes)
                     }

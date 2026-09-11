@@ -71,6 +71,35 @@ object TextChunker {
         return chunks
     }
 
+    /**
+     * Splits [speakable] at sentence ends.
+     *
+     * Chunks are the unit of *playback* - big enough that the model is not
+     * restarted every few words. Sentences are the unit of *generation*:
+     * sherpa-onnx re-splits whatever it is handed on sentence-ending
+     * punctuation and generates each one independently, drawing a speaker per
+     * sentence. Anything that wants to influence one generation from the last
+     * has to work at this granularity, because a chunk boundary is only ever
+     * every third or fourth sentence boundary - which is precisely why the
+     * chunk-level attempt at voice continuity could not have worked.
+     *
+     * The same [SENTENCE_END] the chunker cuts on, so the two agree about what
+     * a sentence is.
+     */
+    fun sentences(speakable: String): List<String> {
+        val out = mutableListOf<String>()
+        var cursor = 0
+        for (match in SENTENCE_END.findAll(speakable)) {
+            val end = match.range.last + 1
+            speakable.substring(cursor, end).trim().takeIf { it.isNotEmpty() }?.let { out += it }
+            cursor = end
+        }
+        // The last sentence usually has no trailing whitespace, so it never
+        // matches; it is whatever is left.
+        speakable.substring(cursor).trim().takeIf { it.isNotEmpty() }?.let { out += it }
+        return out
+    }
+
     private data class Piece(val text: String, val offset: Int)
 
     private fun splitParagraph(paragraph: String, target: Int, max: Int): List<Piece> {
