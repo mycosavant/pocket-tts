@@ -39,7 +39,7 @@ chmod +x ~/.claude/hooks/speak-last.sh
 mkdir -p ~/.claude/commands
 cp android/tools/claude/speak.md ~/.claude/commands/
 
-# 3. the zero-turn version - see below
+# 3. the bare name - see below
 mkdir -p ~/.local/bin
 ln -sf ~/.claude/hooks/speak-last.sh ~/.local/bin/speak-last
 ```
@@ -49,17 +49,19 @@ in Termux.
 
 ## Using it
 
-| what you type | costs | notes |
-|---------------|-------|-------|
-| `!speak-last` | nothing | runs in-session, no model turn |
-| `/speak`      | one round trip | the slash command |
+| what you type | notes |
+|---------------|-------|
+| `!speak-last` | shorter to type; the symlink in step 3 is what makes the bare name work |
+| `/speak`      | the slash command |
 
-**Prefer `!speak-last`.** A leading `!` at the Claude Code prompt runs a shell
-command in the session without consuming a turn. `/speak` has to go to the
-model and come back, and at the rate this gets used that is the difference
-between a free action and a paid one. The symlink in step 3 is what makes the
-bare name work - a shell alias would not, since the command does not run in an
-interactive shell.
+**Both cost a turn.** An earlier version of this document claimed a leading `!`
+ran the command without consuming one. That is wrong, and was corrected after
+watching it on a real session: the command's output is appended to the
+transcript and the assistant responds to it, exactly as a slash command does.
+Pick on typing comfort, not on cost.
+
+The symlink in step 3 is what makes the bare name work - a shell alias would
+not, since the command does not run in an interactive shell.
 
 `~/.claude/keybindings.json` rebinds keys within Claude Code; it is not a way to
 run a shell command, so there is no single-keystroke version of this today.
