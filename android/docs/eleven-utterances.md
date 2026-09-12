@@ -303,3 +303,5 @@ All in [#8](https://github.com/mycosavant/pocket-tts/pull/8): 236 unit tests and
 ---
 
 Source: `/root/dev/pocket-tts-test-findings.md`. Companion to: *Read Aloud Wiring*. Engine measured: sherpa-onnx 1.13.6, pocket-tts-int8-2026-01-26, Whisper base.en as judge.
+
+Committed from the published Claude artifact of the same name (2026-09-12), so this account has a home in the repo alongside the code it describes rather than only in a cloud artifact.
