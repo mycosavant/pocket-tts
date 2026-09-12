@@ -1,7 +1,10 @@
 package org.pockettts.android.player
 
+import android.app.Notification
 import android.os.Build
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -32,6 +35,25 @@ class PlaybackServiceTest {
             "service shut itself down before reading ever began",
             shadowOf(controller.get()).isStoppedBySelf,
         )
+        controller.destroy()
+    }
+
+    @Test
+    fun `stop is one of the three controls in the collapsed notification`() {
+        // Before Android 13 the notification's own actions are what the shade
+        // and the lock screen draw, and collapsed they draw three. Stop used
+        // to be the fourth, and so was never there without expanding - which
+        // the lock screen does not offer.
+        val controller = Robolectric.buildService(PlaybackService::class.java).create()
+        controller.startCommand(0, 0)
+        val notification = shadowOf(controller.get()).lastForegroundNotification
+        val titles = notification.actions.map { it.title.toString() }
+        val compact = notification.extras.getIntArray(Notification.EXTRA_COMPACT_ACTIONS)!!.toList()
+
+        assertEquals(3, compact.size)
+        val shown = compact.map { titles[it] }
+        assertTrue("collapsed controls were $shown", "Stop" in shown)
+        assertTrue("pause must stay in the collapsed controls, got $shown", "Pause" in shown)
         controller.destroy()
     }
 

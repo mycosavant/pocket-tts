@@ -117,8 +117,12 @@ stopping the system killing the read mid-sentence.
 Allowing Pocket TTS to run unrestricted in the battery settings is what grants
 it. On a Samsung device: *Settings → Apps → Pocket TTS → Battery →
 Unrestricted*. With that set, a broadcast read appears in the shade with skip
-back, pause, skip forward and stop, and on the lock screen, and answers the
-buttons on a headset.
+back, pause and stop, forward once the player is expanded, and on the lock
+screen, and answers the buttons on a headset - "next" included.
+
+A skip moves by chunk: a paragraph, or up to a few hundred characters of one.
+A short reply is one chunk, so forward on it ends the read, and starts the next
+queued piece if there is one.
 
 Timings says which of the two happened - `playback service: started`, or
 `refused (...)` with the reason - so "it read but there were no controls" has an
@@ -150,7 +154,7 @@ Timings answers most of it directly:
 | `utterances read` | Whether the broadcast reached `Reader` at all. Force stop the app first so the count starts from zero and there is no doubt which read you are looking at. |
 | `time to first audio` | A cold start pays for the model bundle and the voice prompt inside the read - tens of seconds, and not a fault. The second read tells you the real number. |
 | `generation speed` | Below 1.0x real time means the model cannot keep up with its own playback, and gaps are arithmetic rather than bad luck. Measured on the first chunk of a read only. |
-| `[chunk n] … first=NNNms` | Wall clock from asking for that chunk to its first sample - the voice encode plus the model's first pass. The wait before each chunk starts, and the one number `generation speed` cannot show you. Expect the first chunk of a cold read to be far larger than the rest. |
+| `[chunk n] … first=NNNms` | Wall clock from asking for that chunk to its first sample. That is the model's *whole* pass over the chunk - the engine composes every frame before the decoder produces a sample - so it scales with the chunk's length, and a chunk that is one stripped table row still pays a full pass. The reader composes each chunk while the previous one plays, so this only becomes a silence when it is longer than the previous chunk's audio. Expect the first chunk of a cold read to be far larger than the rest. |
 | `playback service` | Whether the read got its notification and controls; see above. |
 | `[agent] asked for X, got Y` | Which source asked, and whether the voice that answered is the one that was asked for. `FELL BACK` or a prompt size that is not the expected one is the whole diagnosis. |
 

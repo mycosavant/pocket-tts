@@ -4,9 +4,12 @@ import android.content.Context
 import android.util.Log
 import androidx.annotation.VisibleForTesting
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,7 +18,10 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import org.pockettts.android.debug.Metrics
 import org.pockettts.android.engine.EngineTurn
@@ -547,86 +553,178 @@ object Reader {
     }
 
     /**
+     * One piece of a chunk's audio on its way from the engine to the sink;
+     * the end of a chunk when [samples] is null.
+     */
+    private class Piece(val chunk: Int, val samples: FloatArray?)
+
+    /**
      * Reads [current] from chunk [from] to the end.
+     *
+     * Synthesis runs ahead of playback. The engine composes a whole chunk
+     * before it emits a sample - every frame of the language model, then the
+     * decoder - so a chunk's audio arrives all at once, after a silence as
+     * long as the model took. Feeding the sink from inside the engine's
+     * callback, as this used to, meant the next chunk could not begin until
+     * this one had been *heard*: the blocking write held the callback, the
+     * callback held the engine. The silence before every chunk was the model's
+     * full pass over it, less whatever the sink had buffered, and on a phone
+     * that was several seconds between paragraphs, charged for a table that
+     * stripped to one line just as for a long one.
+     *
+     * Now a producer hands pieces to a channel and a consumer writes them,
+     * and the producer may be [LOOKAHEAD_CHUNKS] chunks ahead of the one
+     * being written. The model's pass over chunk N+1 happens while chunk N
+     * plays, and as long as the model is faster than real time - it is, by a
+     * comfortable margin on the device this was measured on - the gap is
+     * gone. Memory is bounded by the lookahead: a chunk is at most a few
+     * hundred characters, under thirty seconds of float audio.
+     *
+     * What is published follows the *listener*: [State.Speaking.chunkIndex]
+     * is the chunk being written to the sink, not the one being composed,
+     * so highlighting and skipping stay true to what is being heard.
      *
      * [askedAt] is when speech was asked for, so the wait before the first
      * sound can be measured rather than guessed at. A skip passes null: it
      * resumes an utterance whose first-audio time is already known.
      */
     private suspend fun play(current: Utterance, from: Int, askedAt: Long? = null) {
+        if (from >= current.chunks.size) {
+            _state.value = State.Finished(current.id, current.source)
+            return
+        }
         var localPlayer: AudioSink? = null
         try {
             localPlayer = sinks.create(current.engine.sampleRate).also {
                 player = it
                 it.start()
             }
+            val sink: AudioSink = localPlayer
 
             // The sink refusing audio means it was stopped under us, which is
             // an interruption and not an ending: whoever stopped it owns the
             // state that follows. Publishing Finished here would put a
             // terminal state on the handover between two utterances - the same
             // bug the Idle-means-two-things design had, wearing a new hat.
-            var interrupted = false
+            val interrupted = AtomicBoolean(false)
             var audible = false
-            var samplesProduced = 0L
-            // Timed on the first chunk only. After that the buffer is full and
-            // the blocking write makes every measurement come out at exactly
-            // real time, which measures the speaker rather than the model.
-            var chunkStartedAt = 0L
-            for (index in from until current.chunks.size) {
-                val chunk = current.chunks[index]
-                coroutineContext.ensureActive()
-                chunkIndex = index
-                _state.value = State.Speaking(
-                    utterance = current.id,
-                    source = current.source,
-                    chunkIndex = index,
-                    chunkCount = current.chunks.size,
-                    start = chunk.start,
-                    end = chunk.end,
-                    paused = localPlayer.isPaused,
-                    audible = audible,
-                )
-                if (EngineTurn.superseded(current.turn)) {
-                    interrupted = true
-                    break
-                }
-                chunkStartedAt = System.currentTimeMillis()
-                val spoke = current.engine.synthesize(
-                    chunk.text,
-                    current.speed,
-                ) { samples ->
-                    // Checked per callback as well as per chunk: a request
-                    // arriving mid-sentence should not have to wait out the
-                    // rest of it.
-                    if (EngineTurn.superseded(current.turn)) return@synthesize false
-                    val written = localPlayer.write(samples)
-                    if (written) samplesProduced += samples.size
-                    if (written && !audible) {
-                        audible = true
-                        askedAt?.let { Metrics.timeToFirstAudioMillis = System.currentTimeMillis() - it }
-                        // Said once, when it becomes true.
-                        (_state.value as? State.Speaking)
-                            ?.takeIf { it.utterance == current.id }
-                            ?.let { _state.value = it.copy(audible = true) }
+            chunkIndex = from
+            _state.value = speakingState(current, from, paused = sink.isPaused, audible = false)
+
+            // Unbounded on purpose: the engine's callback cannot suspend, and a
+            // callback that blocks waiting for room would hold the engine
+            // exactly the way the blocking write used to - and, worse, would
+            // have nothing to wake it once a stop had cancelled the consumer.
+            // The bound is on chunks instead, below.
+            val pieces = Channel<Piece>(Channel.UNLIMITED)
+            // One permit per chunk the producer may be working on or holding
+            // finished: the one being written plus the lookahead. Released as
+            // the consumer finishes each chunk.
+            val permits = Semaphore(LOOKAHEAD_CHUNKS + 1)
+
+            coroutineScope {
+                val producer = launch(Dispatchers.Default) {
+                    val self = coroutineContext.job
+                    try {
+                        for (index in from until current.chunks.size) {
+                            permits.acquire()
+                            if (EngineTurn.superseded(current.turn)) {
+                                interrupted.set(true)
+                                break
+                            }
+                            val chunk = current.chunks[index]
+                            val startedAt = System.currentTimeMillis()
+                            var samplesProduced = 0L
+                            val spoke = current.engine.synthesize(chunk.speech, current.speed) { samples ->
+                                // The engine only looks at this between pieces,
+                                // so a stop is felt within one piece rather than
+                                // at the end of the chunk.
+                                if (!self.isActive) return@synthesize false
+                                // Checked per callback as well as per chunk: a
+                                // request arriving mid-sentence should not have
+                                // to wait out the rest of it.
+                                if (EngineTurn.superseded(current.turn)) {
+                                    interrupted.set(true)
+                                    return@synthesize false
+                                }
+                                samplesProduced += samples.size
+                                pieces.trySend(Piece(index, samples))
+                                true
+                            }
+                            if (index == from) {
+                                // The engine on its own, now that nothing in the
+                                // callback waits on the speaker: audio seconds
+                                // composed per wall second.
+                                val elapsed = System.currentTimeMillis() - startedAt
+                                if (elapsed > 0) {
+                                    Metrics.generationRealTimeFactor =
+                                        samplesProduced.toFloat() / current.engine.sampleRate / (elapsed / 1000f)
+                                }
+                            }
+                            if (!spoke) {
+                                interrupted.set(true)
+                                break
+                            }
+                            pieces.trySend(Piece(index, null))
+                        }
+                        pieces.close()
+                    } catch (cancelled: CancellationException) {
+                        pieces.close()
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        // Delivered to the consumer in order, after the audio
+                        // that was composed before it - so a failure on chunk
+                        // three does not cut off chunk two mid-word.
+                        pieces.close(error)
                     }
-                    written
                 }
-                if (index == from) {
-                    val elapsed = System.currentTimeMillis() - chunkStartedAt
-                    val audioSeconds = samplesProduced.toFloat() / current.engine.sampleRate
-                    if (elapsed > 0) {
-                        Metrics.generationRealTimeFactor = audioSeconds / (elapsed / 1000f)
+
+                withContext(Dispatchers.IO) {
+                    var writing = from
+                    for (piece in pieces) {
+                        coroutineContext.ensureActive()
+                        if (piece.chunk != writing) {
+                            writing = piece.chunk
+                            chunkIndex = writing
+                            _state.value = speakingState(current, writing, paused = sink.isPaused, audible = audible)
+                        }
+                        val samples = piece.samples
+                        if (samples == null) {
+                            if (!sink.writeSilence(current.chunks[piece.chunk].trailingPauseSeconds)) {
+                                interrupted.set(true)
+                                break
+                            }
+                            permits.release()
+                            continue
+                        }
+                        if (EngineTurn.superseded(current.turn)) {
+                            interrupted.set(true)
+                            break
+                        }
+                        if (!sink.write(samples)) {
+                            interrupted.set(true)
+                            break
+                        }
+                        if (!audible) {
+                            audible = true
+                            askedAt?.let { Metrics.timeToFirstAudioMillis = System.currentTimeMillis() - it }
+                            // Said once, when it becomes true.
+                            (_state.value as? State.Speaking)
+                                ?.takeIf { it.utterance == current.id }
+                                ?.let { _state.value = it.copy(audible = true) }
+                        }
                     }
-                }
-                if (!spoke || !localPlayer.writeSilence(chunk.trailingPauseSeconds)) {
-                    interrupted = true
-                    break
+                    // Nothing more will be heard, so nothing more should be
+                    // composed; without this the scope would wait for the
+                    // producer to finish every remaining chunk into a channel
+                    // nobody reads.
+                    if (interrupted.get()) producer.cancel()
                 }
             }
-            localPlayer.drain()
+
+            sink.drain()
             when {
-                !interrupted -> _state.value = State.Finished(current.id, current.source)
+                !interrupted.get() -> _state.value = State.Finished(current.id, current.source)
                 // Losing the engine to a more recent request is an ending this
                 // read has to own; a sink stopped from inside belongs to
                 // whoever stopped it, and they publish their own state.
@@ -646,6 +744,30 @@ object Reader {
             if (player === localPlayer) player = null
         }
     }
+
+    private fun speakingState(current: Utterance, index: Int, paused: Boolean, audible: Boolean): State.Speaking {
+        val chunk = current.chunks[index]
+        return State.Speaking(
+            utterance = current.id,
+            source = current.source,
+            chunkIndex = index,
+            chunkCount = current.chunks.size,
+            start = chunk.start,
+            end = chunk.end,
+            paused = paused,
+            audible = audible,
+        )
+    }
+
+    /**
+     * How many chunks synthesis may run ahead of the one being played.
+     *
+     * One is enough to hide the model's pass over the next chunk behind the
+     * current one, which is the whole point; more would only add memory and
+     * lengthen the work thrown away by a stop or a skip.
+     */
+    @VisibleForTesting
+    internal const val LOOKAHEAD_CHUNKS = 1
 
     fun pause() {
         player?.pause()

@@ -1,7 +1,9 @@
 package org.pockettts.android.player
 
 import android.content.Context
+import android.content.Intent
 import android.media.session.PlaybackState
+import android.view.KeyEvent
 import android.os.Build
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CompletableDeferred
@@ -169,6 +171,54 @@ class TransportTest {
         assertNotNull("no playback state built at all", published)
         val ids = published.customActions.map { it.action }
         assertTrue("no stop custom action, only $ids", Transport.ACTION_STOP in ids)
+    }
+
+    @Test
+    fun `stop takes the collapsed slot that next leaves free`() {
+        // On Android 13 and later the system draws three buttons in the
+        // collapsed player: previous, play/pause, and next - and a custom
+        // action only appears once the player is expanded, which the lock
+        // screen cannot do. On the device it was tested on that meant Stop was
+        // nowhere. Leaving ACTION_SKIP_TO_NEXT unpublished hands its slot to
+        // the first custom action, so that has to be Stop.
+        val published = Transport.playbackState(context, speaking(paused = false, audible = true))
+        assertEquals(0L, published.actions and PlaybackState.ACTION_SKIP_TO_NEXT)
+        assertTrue(
+            "previous must still be a standard action",
+            published.actions and PlaybackState.ACTION_SKIP_TO_PREVIOUS != 0L,
+        )
+        assertEquals(Transport.ACTION_STOP, published.customActions.first().action)
+    }
+
+    @Test
+    fun `forward is still offered, as a custom action`() = runBlocking {
+        val published = Transport.playbackState(context, speaking(paused = false, audible = true))
+        assertTrue(
+            "forward disappeared from the session entirely",
+            published.customActions.any { it.action == Transport.ACTION_SKIP_FORWARD },
+        )
+
+        val id = startHeldRead()
+        transport.callback.onCustomAction(Transport.ACTION_SKIP_FORWARD, null)
+        awaitFor(id, "the next chunk") { it is Reader.State.Speaking && it.chunkIndex >= 1 }
+        engine.gate?.complete(Unit)
+        Unit
+    }
+
+    @Test
+    fun `the next button on a headset still skips forward`() = runBlocking {
+        // The framework only routes KEYCODE_MEDIA_NEXT to onSkipToNext when
+        // ACTION_SKIP_TO_NEXT is published, and it is deliberately not; the
+        // callback has to take the key itself or the button goes dead.
+        val id = startHeldRead()
+        val press = Intent(Intent.ACTION_MEDIA_BUTTON).putExtra(
+            Intent.EXTRA_KEY_EVENT,
+            KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT),
+        )
+        assertTrue("the key was not handled", transport.callback.onMediaButtonEvent(press))
+        awaitFor(id, "the next chunk") { it is Reader.State.Speaking && it.chunkIndex >= 1 }
+        engine.gate?.complete(Unit)
+        Unit
     }
 
     @Test

@@ -72,3 +72,65 @@ class TextChunkerTest {
         assertEquals("One. Two. Three. Four. Five.", rejoined)
     }
 }
+
+class ShortTailTest {
+
+    private val lead = "This is a test read sent from Termux."
+
+    @Test
+    fun `a trailing run of one-word sentences is spoken as one sentence`() {
+        // The model ended "One. Two. Three." after "Two" in two runs of
+        // three, and said "Done" twice for "Patching. Testing. Done." in all
+        // three; joined with commas both read in full every time.
+        val chunk = TextChunker.chunk("$lead One. Two. Three.").single()
+        assertEquals("$lead One, Two, Three.", chunk.speech)
+        assertEquals("$lead Patching, Testing, Done.", TextChunker.joinShortTail("$lead Patching. Testing. Done."))
+    }
+
+    @Test
+    fun `what the user sees is not rewritten`() {
+        val text = "$lead One. Two. Three."
+        val chunk = TextChunker.chunk(text).single()
+        assertEquals(text, chunk.text)
+        assertEquals(text, text.substring(chunk.start, chunk.end))
+    }
+
+    @Test
+    fun `two-word sentences count as short`() {
+        // "It compiles. Yes." lost its "Yes" in one run of three.
+        assertEquals("$lead It compiles, Yes.", TextChunker.joinShortTail("$lead It compiles. Yes."))
+    }
+
+    @Test
+    fun `one short sentence at the end is left alone`() {
+        // "... Termux. Done." was read in full in every run; there is nothing
+        // to fix, and a comma there would turn a sentence into a run-on.
+        assertEquals("$lead Done.", TextChunker.joinShortTail("$lead Done."))
+        assertEquals("$lead All tests pass. Done.", TextChunker.joinShortTail("$lead All tests pass. Done."))
+    }
+
+    @Test
+    fun `short sentences before the end are left alone`() {
+        // Mid-text runs were read in full every time; it is the end of a
+        // generation that is fragile.
+        val text = "One. Two. Three. Four. Five. And this final ordinary sentence closes the read."
+        assertEquals(text, TextChunker.joinShortTail(text))
+    }
+
+    @Test
+    fun `a chunk that is nothing but short sentences is joined`() {
+        assertEquals("One, Two, Three, Four, Five.", TextChunker.joinShortTail("One. Two. Three. Four. Five."))
+    }
+
+    @Test
+    fun `the last sentence keeps its own punctuation`() {
+        assertEquals("$lead Ready, Set, Go!", TextChunker.joinShortTail("$lead Ready. Set. Go!"))
+        assertEquals("$lead Really, Yes.", TextChunker.joinShortTail("$lead Really?! Yes."))
+    }
+
+    @Test
+    fun `a single sentence is never touched`() {
+        assertEquals("Done.", TextChunker.joinShortTail("Done."))
+        assertEquals("", TextChunker.joinShortTail(""))
+    }
+}
