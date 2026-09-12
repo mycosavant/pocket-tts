@@ -137,6 +137,25 @@ CLAUDE_TTS=print ~/.claude/hooks/speak-last.sh
 am broadcast -n org.pockettts.android/.SpeakReceiver --es text "Receiver check."
 ```
 
+`am` cannot confirm delivery. It prints `Broadcast sent without waiting for
+result` and exits 0 whether the receiver handled it, does not exist, or the
+package is not installed at all - so a successful-looking run proves only that
+the intent left Termux. `utterances read` in Timings is the confirmation.
+
+It *does* exit 1 when the platform refuses the broadcast outright. On Android 16
+that happens if the user id is left implicit:
+
+```
+SecurityException: Permission Denial: getIntentSender asks to run as user -2
+but is calling from uid u0aNNN; this requires INTERACT_ACROSS_USERS_FULL
+or android.permission.INTERACT_ACROSS_USERS
+```
+
+`-2` is `USER_CURRENT`, which termux-am passes by default and which the platform
+will no longer resolve from an app uid. The script sends an explicit `--user 0`;
+override with `CLAUDE_TTS_USER` on a work profile or secondary user. `--user
+current` is not an alternative - it maps to the same -2.
+
 Then open Pocket TTS and tap **Timings**. That is the instrument, not `logcat`:
 Android stopped letting an app read another app's logs at 4.1, and Termux is an
 ordinary app, so `logcat` from there shows you Termux and nothing else. Reading
