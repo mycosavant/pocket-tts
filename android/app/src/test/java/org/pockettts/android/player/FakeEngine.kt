@@ -79,13 +79,23 @@ class FakeSink : AudioSink {
     var samplesWritten = 0
         private set
 
+    @Volatile
     private var stopped = false
     override var isPaused: Boolean = false
         private set
 
+    /**
+     * While true, writes block as a full `AudioTrack` buffer would. A test
+     * that wants to see what the reader does *while* audio is being played
+     * sets this; a stop releases the write, as it does the real one.
+     */
+    @Volatile
+    var holdWrites = false
+
     override fun start() { started++ }
 
     override fun write(samples: FloatArray): Boolean {
+        while (holdWrites && !stopped) Thread.sleep(2)
         if (stopped) return false
         samplesWritten += samples.size
         return true

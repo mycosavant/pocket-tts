@@ -387,6 +387,73 @@ class ReaderTest {
         assertFalse("the queued read ran after a stop", engine.spoken.contains("Second passage."))
     }
 
+    /** Three paragraphs, so three chunks; the pipeline needs more than one. */
+    private val threeChunks = "First paragraph here.\n\nSecond paragraph here.\n\nThird paragraph here."
+
+    @Test
+    fun `the next chunk is composed while the current one is still playing`() = runBlocking {
+        // The engine composes a whole chunk before it emits a sample, so
+        // feeding the speaker from inside its callback meant chunk two could
+        // not begin until chunk one had been heard - a silence as long as the
+        // model's pass before every paragraph. Holding the write is what a
+        // full audio buffer does; the second chunk has to reach the engine
+        // while the first is still being written.
+        val id = Reader.speak(context, threeChunks, treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitUntil("a sink exists") { sinks.created.isNotEmpty() }
+        val sink = sinks.created.single()
+        sink.holdWrites = true
+
+        awaitUntil("the second chunk was composed during the first") { engine.spoken.size == 2 }
+        // Still playing the first: what is published follows the listener,
+        // not the engine.
+        val state = Reader.state.value
+        assertTrue("expected Speaking, got $state", state is Reader.State.Speaking)
+        assertEquals(0, (state as Reader.State.Speaking).chunkIndex)
+
+        // And no further: one chunk of lookahead is the bound. The third has
+        // to wait for the first to be written.
+        delay(200)
+        assertEquals("composed past the lookahead", 2, engine.spoken.size)
+
+        sink.holdWrites = false
+        awaitFor(id, "finished") { it is Reader.State.Finished }
+        assertEquals(3, engine.spoken.size)
+        assertEquals(3 * (engine.sampleRate / 10), sink.samplesWritten)
+    }
+
+    @Test
+    fun `a stop discards what was composed ahead`() = runBlocking {
+        val id = Reader.speak(context, threeChunks, treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitUntil("a sink exists") { sinks.created.isNotEmpty() }
+        val sink = sinks.created.single()
+        sink.holdWrites = true
+        awaitUntil("the second chunk was composed") { engine.spoken.size == 2 }
+
+        Reader.stop()
+        awaitFor(id, "stopped") { it is Reader.State.Stopped }
+        awaitUntil("the reader went idle") { !Reader.isActive }
+        // The held write was refused, and nothing composed ahead of it was
+        // written afterwards.
+        assertEquals(0, sink.samplesWritten)
+        assertEquals(2, engine.spoken.size)
+    }
+
+    @Test
+    fun `a failure composing a later chunk still plays the earlier ones`() = runBlocking {
+        // The failure travels through the same channel as the audio, behind
+        // it - so chunk one is heard in full before the read reports failing
+        // on chunk two, rather than being cut off by news from the future.
+        val exploding = FakeEngine(failOn = "Second paragraph here.")
+        Reader.engines = FakeEngine.Factory(exploding)
+        val id = Reader.speak(context, threeChunks, treatAsMarkdown = false, source = Reader.Source.Agent)
+        val state = awaitFor(id, "failed") { it is Reader.State.Failed }
+        assertTrue(state.isTerminal)
+        awaitUntil("the first chunk was written") {
+            sinks.created.sumOf { it.samplesWritten } == exploding.sampleRate / 10
+        }
+        Reader.engines = engines
+    }
+
     @Test
     fun `blank text finishes instead of leaving the reader hanging`() = runBlocking {
         val id = Reader.speak(context, "   ", treatAsMarkdown = false, source = Reader.Source.Scratchpad)

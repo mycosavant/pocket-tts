@@ -206,6 +206,28 @@ other apps ─────▶ PocketTtsService ───┘      ▼
 `MarkdownSpeech`, `TextChunker` and `WavReader` are plain JVM code and are
 covered by unit tests in `app/src/test`.
 
+## Stop has to be in the collapsed controls
+
+The collapsed media player - the shade before it is expanded, the lock screen,
+which cannot expand it - shows three controls. Stop was the fourth, on the
+theory that swiping the notification away already ended the read; a media
+notification for a read in progress cannot be swiped away, and on the device
+the broadcast path was first tested on there was no way to end a read from the
+shade at all. That is the one control a reader started from a pocket cannot be
+without.
+
+Two things draw those controls and both had to change. Before Android 13 the
+notification's own actions are drawn, and the compact view now shows back,
+pause and stop. From Android 13 the system draws the media session's actions
+instead: previous, play/pause and next take the three slots, and a custom
+action - which is the only way to offer Stop at all, since the system has no
+button for `ACTION_STOP` - appears only once expanded. So `Transport` no longer
+publishes `ACTION_SKIP_TO_NEXT`, which hands that slot to the first custom
+action, and that is Stop. Forward becomes a custom action in the expanded
+view, and the headset's "next" button - which the framework only routes to
+`onSkipToNext` when the action is published - is taken by the callback itself.
+Forward was the one to demote: it is the control that ends a read by accident.
+
 ## Saying the true thing while waiting
 
 The model composes an entire sentence before it emits a single sample, so there
@@ -302,10 +324,18 @@ is why the part that had actually been wrong had no tests - and why
 bundle on every run of the unit suite.
 
 Skipping is built on the same seam. An utterance keeps its chunks, its engine
-and its loaded voice, so back a sentence costs that sentence and nothing else:
-no re-selection, no reload. Back at the first sentence replays it; forward past
-the last one ends the read, which is what someone who keeps tapping forward
-means by it.
+and its loaded voice, so skipping back costs re-composing one chunk and nothing
+else: no re-selection, no reload. Back at the first chunk replays it; forward
+past the last one ends the read, which is what someone who keeps tapping
+forward means by it - and starts the next queued read, if there is one.
+
+A chunk is the unit, and a chunk is not a sentence: it is a paragraph, or up to
+a few hundred characters of one, cut at sentence ends. The controls used to be
+labelled "a sentence", and on a short reply - one paragraph, one chunk - a tap
+forward near its second sentence ended the read, which reads as the wrong
+button doing stop's job. The labels now say what the buttons do. A skip finer
+than a chunk would need the engine to give audio back sentence by sentence,
+and it composes a chunk whole.
 
 `GlassPanelViewTest` asserts the two things that were missing when the sliders
 went dead: where the panel thinks it is relative to its backdrop, and what
@@ -343,6 +373,49 @@ one that was already named after a stock voice is indistinguishable from the
 prompt it replaced and is left to be re-downloaded. `VoiceStorageTest` covers
 all of it, and restoring the shared directory fails four of its six cases.
 
+## The model decides when it is done, and gets the end wrong
+
+The engine has no length for a chunk in advance. It runs the language model
+frame by frame and stops when the model's own end-of-speech head crosses a
+fixed threshold, plus three frames. That head is wrong in one particular
+place: the end of a generation, when what remains to be said is a few very
+short sentences. Found on the device - a reply ending `One. Two. Three. Four.
+Five.` stopped after "Two" - and then reproduced here on the same engine build,
+the same int8 bundle and the same Alba prompt, with a speech recogniser as the
+judge, so the mechanism is measured rather than guessed:
+
+- `... One. Two. Three.` lost "Three" in two runs of three; `... Patching.
+  Testing. Done.` said "done" twice in all three; `One. Two. Three. Four.
+  Five.` on its own lost "Five" every time. The same runs with ordinary prose
+  after them were read in full every time: it is the *end* that is fragile.
+- Letting generation run on past the end-of-speech mark does not recover the
+  words. After a genuine ending the model does not fall silent, it repeats the
+  last word - `five, five, five` for as long as it is allowed - so there is no
+  silence to trim to.
+- The reference implementation pads very short inputs with leading spaces
+  because "the model does not perform well when there are very few tokens".
+  sherpa-onnx strips them before the model sees them; padded and bare runs
+  were identical to the sample.
+- The same short sentences joined with commas into one - `One, Two, Three.` -
+  were read in full in every run, for every shape tried.
+
+So `TextChunker` gives each chunk a `speech` form: a run of two or more
+sentences of two words or fewer at the end of a chunk is joined with commas.
+What the user sees and what is highlighted is untouched; a period becoming a
+comma is the whole of the difference in what is said. `MarkdownSpeech` already
+makes every list item and heading its own paragraph, so a list is never a run
+of short sentences inside one chunk; this is for prose that ends in a
+countdown or a string of one-word statuses, which is how agent replies end.
+
+What it does not cover, and is written down so nobody re-derives it: the same
+head can fire early inside an ordinary sentence. `Tests 1, 2 and 3 are green.`
+lost "green" in two runs of three here - an enumeration of numbers reads to the
+model like a countdown ending - while `Files A, B and C are updated.` and plain
+prose endings were never cut. The threshold is hard-coded in the engine, the
+reference implementation uses the same value, and nothing at this layer can
+tell a premature end from a real one without a recogniser listening. This is
+the model's limit, and the tail rule is the part of it the app can reach.
+
 ## Measuring before optimising
 
 Inference is CPU-only and near real time, and every performance question about
@@ -351,16 +424,32 @@ So `debug/Metrics` collects three numbers and the main screen shows them, with a
 share button, the way the exit report does.
 
 - **Time to first audio**, which is the wait everybody feels.
-- **Generation speed on the first chunk**, before the buffer fills and blocking
-  writes make every later measurement come out at exactly real time by
-  construction. Below 1.0 means the model cannot keep up with its own playback.
-- **Underruns**, which settle an open question. Synthesis blocks inside the
-  audio callback, so sherpa-onnx cannot begin the next sentence until the buffer
-  has drained to a couple of seconds; the prediction is a gap at every sentence
-  boundary, fixed by putting a channel between synthesis and the audio track.
-  That refactor is not written, deliberately. If underruns climb once per
-  sentence the theory holds; if they stay at zero it does not, and the fix would
-  have been a guess dressed as an improvement.
+- **Generation speed on the first chunk**: audio seconds composed per wall
+  second, by the engine alone. Below 1.0 means the model cannot keep up with
+  its own playback.
+- **Underruns**, which now say one thing: whether composing the next chunk
+  while the current one plays is enough to keep the speaker fed. They climb
+  only when the model falls behind real time.
+
+The channel between synthesis and the audio track, which an earlier version of
+this section deliberately left unwritten until underruns proved it necessary,
+is written - but the device proved something else first. Reading the engine's
+source settled how it actually delivers audio: `GenerateSingleSentence` runs
+every frame of the language model over a chunk *before* the decoder produces a
+sample, and only then hands audio back, in pieces of just over a second. So
+`first=NNNms` in the voice trace is not a prompt being primed; it is the whole
+of the model's pass over that chunk. And because the sink was fed from inside
+the engine's callback, chunk N+1 could not begin until chunk N had been *heard*:
+the silence before every paragraph was the model's full pass over it, less a
+couple of seconds of buffer, charged for a table that stripped to one line just
+as for a long one. Underruns could not see that, because a track that is simply
+not written to between chunks is not "running dry" in a way that counts.
+
+`Reader` now composes a chunk ahead of the one being played. The bound is one
+chunk of lookahead, which is enough to hide the model's pass behind the
+previous chunk's audio whenever the model is faster than real time, and it is
+on the device this was measured on. What the state publishes - the highlighted
+chunk, what a skip counts from - follows the listener, not the engine.
 
 An unmeasured value reports "not measured yet" rather than a confident zero, and
 `MetricsTest` enforces that. "0 underruns" from a session that never played

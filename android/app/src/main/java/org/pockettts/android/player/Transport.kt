@@ -4,7 +4,9 @@ import android.content.Context
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.annotation.VisibleForTesting
 import org.pockettts.android.R
 import org.pockettts.android.engine.Settings
@@ -56,10 +58,28 @@ class Transport(private val context: Context) {
         // ACTION_STOP is not one of them - so a read started from the broadcast
         // offered back, pause and forward and no way to end it short of waiting
         // it out or finding the app. A custom action is the supported way to
-        // put a fourth button there, and it lands on the same Reader.stop as
-        // the sheet's own Stop.
+        // put a button there, and it lands on the same Reader.stop as the
+        // sheet's own Stop. Forward is a custom action too; see [ACTIONS].
         override fun onCustomAction(action: String, extras: Bundle?) {
-            if (action == ACTION_STOP) Reader.stop()
+            when (action) {
+                ACTION_STOP -> Reader.stop()
+                ACTION_SKIP_FORWARD -> Reader.skipForward()
+            }
+        }
+
+        // The framework only forwards a headset's "next" to onSkipToNext when
+        // ACTION_SKIP_TO_NEXT is in the published actions, and it is
+        // deliberately not (see [ACTIONS]). Taking the key here keeps the
+        // button on the headphones doing what it always did.
+        override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
+            val key = keyEventOf(mediaButtonIntent)
+            if (key != null && key.action == KeyEvent.ACTION_DOWN && key.repeatCount == 0 &&
+                key.keyCode == KeyEvent.KEYCODE_MEDIA_NEXT
+            ) {
+                Reader.skipForward()
+                return true
+            }
+            return super.onMediaButtonEvent(mediaButtonIntent)
         }
     }
 
@@ -93,13 +113,38 @@ class Transport(private val context: Context) {
         /** The custom action id for Stop; see [callback]. */
         const val ACTION_STOP = "org.pockettts.android.transport.STOP"
 
+        /** The custom action id for skipping forward; see [ACTIONS]. */
+        const val ACTION_SKIP_FORWARD = "org.pockettts.android.transport.SKIP_FORWARD"
+
         /** How much of the text the system player shows as the title. */
         private const val TITLE_CHARS = 80
 
+        /**
+         * What the session says it can do - and, on Android 13 and later,
+         * which buttons the system draws.
+         *
+         * The system player has three slots in its collapsed form: previous,
+         * play/pause, next. A standard action in this mask claims its slot;
+         * a slot left unclaimed goes to the first custom action. Everything
+         * else, custom actions included, is only reachable by expanding the
+         * player, and on the lock screen there is nothing to expand.
+         *
+         * So Stop as a custom action *alone* bought no visible button: on the
+         * device it was tested on, the shade and the lock screen showed back,
+         * pause and forward, and no way to end the read. Not publishing
+         * ACTION_SKIP_TO_NEXT leaves that slot to Stop, and forward moves to
+         * the expanded view as a custom action. For a reader controlled from a
+         * pocket, ending the read is the control that has to be there; forward
+         * is the one that ends it by accident, since a skip past the last chunk
+         * finishes the utterance.
+         *
+         * The headset's "next" button is unaffected: [callback] takes the key
+         * itself, because the framework's default only forwards it when the
+         * action is published.
+         */
         private const val ACTIONS = PlaybackState.ACTION_PLAY or
             PlaybackState.ACTION_PAUSE or
             PlaybackState.ACTION_PLAY_PAUSE or
-            PlaybackState.ACTION_SKIP_TO_NEXT or
             PlaybackState.ACTION_SKIP_TO_PREVIOUS or
             PlaybackState.ACTION_STOP
 
@@ -126,6 +171,8 @@ class Transport(private val context: Context) {
         fun playbackState(context: Context, state: Reader.State): PlaybackState =
             PlaybackState.Builder()
                 .setActions(ACTIONS)
+                // Order matters: the first custom action takes the collapsed
+                // slot that ACTION_SKIP_TO_NEXT leaves free. See [ACTIONS].
                 .addCustomAction(
                     PlaybackState.CustomAction.Builder(
                         ACTION_STOP,
@@ -133,8 +180,27 @@ class Transport(private val context: Context) {
                         R.drawable.ic_stop,
                     ).build(),
                 )
+                .addCustomAction(
+                    PlaybackState.CustomAction.Builder(
+                        ACTION_SKIP_FORWARD,
+                        context.getString(R.string.skip_forward),
+                        R.drawable.ic_skip_next,
+                    ).build(),
+                )
                 .setState(playbackStateOf(state), PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
                 .build()
+
+        /** The key a media-button intent carries, if it carries one. */
+        @VisibleForTesting
+        fun keyEventOf(intent: Intent): KeyEvent? =
+            if (intent.action != Intent.ACTION_MEDIA_BUTTON) {
+                null
+            } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+            }
 
         fun playbackStateOf(state: Reader.State): Int = when {
             state is Reader.State.Preparing -> PlaybackState.STATE_BUFFERING

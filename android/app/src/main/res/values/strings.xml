@@ -64,8 +64,8 @@
     <string name="installing_model">Unpacking the model…</string>
     <string name="model_install_failed">Could not install that file: %1$s</string>
 
-    <string name="skip_back">Back a sentence</string>
-    <string name="skip_forward">Forward a sentence</string>
+    <string name="skip_back">Skip back</string>
+    <string name="skip_forward">Skip forward</string>
 
     <string name="play_sample">Play a sample of this voice</string>
     <string name="stop_sample">Stop the sample</string>

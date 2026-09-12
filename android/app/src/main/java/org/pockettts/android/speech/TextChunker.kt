@@ -1,5 +1,7 @@
 package org.pockettts.android.speech
 
+import androidx.annotation.VisibleForTesting
+
 /**
  * Splits speakable text into chunks that are synthesised one at a time.
  *
@@ -15,13 +17,20 @@ object TextChunker {
 
     /** A run of text to synthesise, plus the silence that should follow it. */
     data class Chunk(
+        /** The chunk as it appears in the speakable text; [start] until [end] of it. */
         val text: String,
         /** Seconds of silence appended after this chunk. */
         val trailingPauseSeconds: Float,
         /** Offset of [text] in the string that was chunked, for highlighting. */
         val start: Int,
         val end: Int,
-    )
+    ) {
+        /**
+         * What the engine is actually handed: [text], with a trailing run of
+         * very short sentences joined into one. See [joinShortTail].
+         */
+        val speech: String = joinShortTail(text)
+    }
 
     private const val TARGET = 200
     private const val MAX = 400
@@ -29,8 +38,83 @@ object TextChunker {
     private const val PARAGRAPH_PAUSE = 0.45f
     private const val SENTENCE_PAUSE = 0.0f
 
+    /**
+     * A sentence of this many words or fewer is "short" for [joinShortTail].
+     *
+     * Two rather than one because "It compiles. Yes." lost its "Yes." in one
+     * run of three, and nothing with a three-word sentence before the end
+     * ever lost anything.
+     */
+    private const val SHORT_SENTENCE_WORDS = 2
+
     private val SENTENCE_END = Regex("""[.!?…]["')\]]*\s""")
     private val CLAUSE_END = Regex("""[,;:]["')\]]*\s""")
+
+    /** Sentence-final punctuation, allowing a closing quote or bracket after it. */
+    private val TERMINAL_PUNCTUATION = Regex("""[.!?…]+(?=["')\]]*$)""")
+    private val WORD_CHARACTER = Regex("""[\p{L}\p{N}]""")
+
+    /**
+     * Joins a run of very short sentences at the end of [text] into one
+     * sentence, with commas: `One. Two. Three.` becomes `One, Two, Three.`
+     *
+     * The model decides for itself when it has finished speaking, and it gets
+     * that wrong in one specific place: the end of a generation, when what is
+     * left to say is a few one- or two-word sentences. Measured on the same
+     * engine build the app ships, with the stock Alba prompt, over three
+     * seeds: `... Termux. One. Two. Three.` lost "Three" in two of three,
+     * `... Patching. Testing. Done.` said "done" twice in all three, and
+     * `One. Two. Three. Four. Five.` on its own lost "Five" every time. The
+     * same words joined with commas were read in full in every run, and so
+     * were the same runs when ordinary prose followed them - it is the *end*
+     * that is fragile, not the short sentences. A single short sentence at
+     * the end after something longer was fine every time and is left alone.
+     *
+     * Not a rewrite of what the user sees: [Chunk.text] and the offsets stay
+     * true to the source, and a period becoming a comma is the whole of the
+     * difference in what is said. It is done here rather than in
+     * `MarkdownSpeech` because it is a property of how a chunk *ends*, and
+     * chunking is what decides where that is.
+     *
+     * The alternatives were measured too. Letting generation run on past the
+     * model's end-of-speech mark does not recover the words, because after a
+     * genuine ending the model repeats the last word rather than falling
+     * silent. Generating each short sentence on its own costs a full voice
+     * conditioning pass per word. Padding the text with leading spaces, which
+     * the reference implementation does for short inputs, is stripped by
+     * sherpa-onnx before it reaches the model.
+     */
+    @VisibleForTesting
+    internal fun joinShortTail(text: String): String {
+        val starts = mutableListOf(0)
+        for (end in SENTENCE_END.findAll(text)) starts += end.range.last + 1
+        val sentences = starts.mapIndexed { i, from ->
+            text.substring(from, starts.getOrNull(i + 1) ?: text.length)
+        }.filter { it.isNotBlank() }
+
+        var head = sentences.size
+        while (head > 0 && wordCount(sentences[head - 1]) <= SHORT_SENTENCE_WORDS) head--
+        val tail = sentences.size - head
+        if (tail < 2) return text
+
+        return buildString {
+            sentences.take(head).forEach { append(it) }
+            sentences.drop(head).forEachIndexed { i, sentence ->
+                if (i == tail - 1) {
+                    append(sentence)
+                } else {
+                    // The whitespace that separated the sentences is kept, so
+                    // the join is the punctuation and nothing else.
+                    val body = sentence.trimEnd()
+                    append(TERMINAL_PUNCTUATION.replace(body, ","))
+                    append(sentence, body.length, sentence.length)
+                }
+            }
+        }
+    }
+
+    private fun wordCount(sentence: String): Int =
+        sentence.split(Regex("""\s+""")).count { WORD_CHARACTER.containsMatchIn(it) }
 
     fun chunk(speakable: String, target: Int = TARGET, max: Int = MAX): List<Chunk> {
         val chunks = mutableListOf<Chunk>()

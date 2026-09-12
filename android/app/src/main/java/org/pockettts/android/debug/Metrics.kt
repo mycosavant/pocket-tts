@@ -16,15 +16,15 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * - **Time to first audio.** The wait everybody feels. Everything else about
  *   the reading experience is downstream of it.
- * - **Generation speed on the first chunk**, before the buffer fills and
- *   blocking writes make every subsequent measurement come out at exactly real
- *   time by construction. Below 1.0 means the model cannot keep up with its own
- *   playback and gaps are inevitable rather than incidental.
- * - **Underruns.** `AudioTrack` counts the times it ran dry. Synthesis blocks
- *   inside the audio callback, so sherpa-onnx cannot begin the next sentence
- *   until the buffer has drained to a couple of seconds; if that theory is
- *   right this number climbs once per sentence. If it stays at zero the theory
- *   is wrong and the fix it implies is not worth making.
+ * - **Generation speed on the first chunk**: audio seconds composed per wall
+ *   second, by the engine alone. Synthesis no longer waits on the speaker, so
+ *   this is the model's own pace. Below 1.0 means it cannot keep up with its
+ *   own playback and gaps are inevitable rather than incidental.
+ * - **Underruns.** `AudioTrack` counts the times it ran dry. Synthesis used to
+ *   block inside the audio callback, so the engine could not begin the next
+ *   chunk until the buffer had drained; the reader now composes the next
+ *   chunk while the current one plays, and this number is what says whether
+ *   that is enough. It climbs only when the model falls behind real time.
  */
 object Metrics {
 
@@ -48,8 +48,8 @@ object Metrics {
         }
 
     /**
-     * Audio seconds produced per wall second, on the first chunk of the last
-     * utterance. Above 1.0 is faster than real time.
+     * Audio seconds composed per wall second, on the first chunk of the last
+     * utterance, by the engine alone. Above 1.0 is faster than real time.
      */
     var generationRealTimeFactor: Float
         get() = generationRtfMilli.get() / 1000f

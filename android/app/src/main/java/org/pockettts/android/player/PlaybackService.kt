@@ -192,11 +192,18 @@ class PlaybackService : Service() {
             .setStyle(
                 Notification.MediaStyle()
                     .setMediaSession(transport.token)
-                    // The collapsed notification has room for three. Stop is
-                    // the one to drop: swiping the notification away and
-                    // leaving the app both already stop the read, and it is
-                    // the only one of the four that cannot be undone.
-                    .setShowActionsInCompactView(0, 1, 2),
+                    // The collapsed notification has room for three, and Stop
+                    // has to be one of them. It used to be the one dropped, on
+                    // the theory that swiping the notification away already
+                    // stopped the read - but a media notification for a read
+                    // in progress cannot be swiped away, and on the device the
+                    // broadcast path was tested on there was no way to end a
+                    // read from the shade at all. Forward is the one to drop:
+                    // it is the control that ends a read by accident, and it
+                    // is still there once the notification is expanded. On
+                    // Android 13 and later the system draws the session's
+                    // actions instead, and Transport makes the same choice.
+                    .setShowActionsInCompactView(0, 1, 3),
             )
             .build()
 
