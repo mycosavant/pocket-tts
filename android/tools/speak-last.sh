@@ -33,6 +33,18 @@ PACKAGE=org.pockettts.android
 RECEIVER="$PACKAGE/.SpeakReceiver"
 ACTIVITY="$PACKAGE/.ui.ReadAloudActivity"
 
+# termux-am defaults to USER_CURRENT (-2), and Android 16 refuses to resolve
+# that from an app uid:
+#
+#   SecurityException: Permission Denial: getIntentSender asks to run as user
+#   -2 but is calling from uid u0aNNN; this requires INTERACT_ACROSS_USERS_FULL
+#   or android.permission.INTERACT_ACROSS_USERS
+#
+# An explicit id avoids it. `--user current` maps to the same -2 and fails the
+# same way, so it is not an alternative. Override for a work profile or a
+# secondary user.
+USER_ID=${CLAUDE_TTS_USER:-0}
+
 # Characters per broadcast. SpeakReceiver refuses more than 64 KB of UTF-8, and
 # a String extra is parcelled as UTF-16, so this leaves room under both without
 # anyone having to think about which one binds. Anything longer is split and
@@ -93,7 +105,8 @@ encoded=$(jq -c '
     select(.type == "assistant" and (.isSidechain // false) == false)
     | [ .message.content[]? | select(.type == "text") | .text ]
     | join("\n\n")
-  ' "$transcript" 2>/dev/null | grep -v '^""$' | tail -1)
+    | select(length > 0)
+  ' "$transcript" 2>/dev/null | awk 'END{print}')
 
 [ -n "$encoded" ] || die "speak-last: no assistant message in $(basename "$transcript")"
 
@@ -148,24 +161,40 @@ case "$mode" in
 
   broadcast)
     sent=0
+    # A temp file rather than `< <(...)`: process substitution needs /dev/fd,
+    # and under proot /dev/fd is bound to the *reader's* /proc/self/fd, so the
+    # shell's fd 63 is not there to open. The loop body then never runs at all,
+    # and the only sign of it is a "(0 broadcast(s))" in the success message.
+    queue=$(mktemp) || die "speak-last: could not create a temp file"
+    trap 'rm -f "$queue"' EXIT
+    printf '%s' "$text" | split > "$queue"
+
+    # `am` exits 1 for a refused broadcast, but 0 for one addressed to a
+    # receiver that does not exist - the output is identical either way, so a
+    # missing app cannot be detected from here. Timings -> `utterances read` is
+    # what confirms delivery.
     while IFS= read -r -d '' piece; do
       if [ "$sent" -eq 0 ]; then
-        am broadcast -n "$RECEIVER" --es text "$piece" --ez append false >/dev/null 2>&1 \
-          || die "speak-last: am broadcast failed - is Pocket TTS installed?"
+        err=$(am broadcast --user "$USER_ID" -n "$RECEIVER" \
+                --es text "$piece" --ez append false 2>&1 >/dev/null) \
+          || die "speak-last: am broadcast failed${err:+ - }${err}"
       else
         # Queued rather than sent as a second read: without this each piece
         # would silence the one before it, and a long reply would play as the
         # last few words of its last paragraph.
-        am broadcast -n "$RECEIVER" --es text "$piece" --ez append true >/dev/null 2>&1
+        am broadcast --user "$USER_ID" -n "$RECEIVER" \
+          --es text "$piece" --ez append true >/dev/null 2>&1
       fi
       sent=$((sent + 1))
-    done < <(printf '%s' "$text" | split)
+    done < "$queue"
+
+    [ "$sent" -gt 0 ] || die "speak-last: nothing was sent - the queue was empty"
     printf 'Reading %s characters in Pocket TTS (%s broadcast(s)).\n' "$chars" "$sent"
     ;;
 
   pocket)
     [ "$chars" -le "$LIMIT" ] || die "speak-last: $chars characters is too much for one activity start; use CLAUDE_TTS=broadcast"
-    am start -n "$ACTIVITY" \
+    am start --user "$USER_ID" -n "$ACTIVITY" \
       -a android.intent.action.PROCESS_TEXT -t text/plain \
       --es android.intent.extra.PROCESS_TEXT "$text" \
       --ez android.intent.extra.PROCESS_TEXT_READONLY true >/dev/null 2>&1 \
