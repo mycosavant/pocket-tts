@@ -149,7 +149,8 @@ Timings answers most of it directly:
 |------|-----------------|
 | `utterances read` | Whether the broadcast reached `Reader` at all. Force stop the app first so the count starts from zero and there is no doubt which read you are looking at. |
 | `time to first audio` | A cold start pays for the model bundle and the voice prompt inside the read - tens of seconds, and not a fault. The second read tells you the real number. |
-| `generation speed` | Below 1.0x real time means the model cannot keep up with its own playback, and gaps are arithmetic rather than bad luck. |
+| `generation speed` | Below 1.0x real time means the model cannot keep up with its own playback, and gaps are arithmetic rather than bad luck. Measured on the first chunk of a read only. |
+| `[chunk n] … first=NNNms` | Wall clock from asking for that chunk to its first sample - the voice encode plus the model's first pass. The wait before each chunk starts, and the one number `generation speed` cannot show you. Expect the first chunk of a cold read to be far larger than the rest. |
 | `playback service` | Whether the read got its notification and controls; see above. |
 | `[agent] asked for X, got Y` | Which source asked, and whether the voice that answered is the one that was asked for. `FELL BACK` or a prompt size that is not the expected one is the whole diagnosis. |
 

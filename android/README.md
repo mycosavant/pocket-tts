@@ -555,27 +555,32 @@ that does not match, a client sending a stale id shows a `requested` that is not
 the selection, and a voice wandering with all of that correct is the draw. It
 shares a screen with Timings, by the same reasoning as the exit report.
 
-## Steps per frame, and a factor of five
+## Steps per frame, and the factor of five that was not there
 
 `GenerationConfig.numSteps` is how many Euler steps the flow integration takes
 for each generated frame. sherpa-onnx defaults it to 5. The reference
 implementation defaults to 1 - in `lsd_decode` itself and again in
-`default_parameters.py`. Four fifths of that work may be buying nothing, per
-frame, on a phone.
+`default_parameters.py`. Four fifths of that work looked like it might be buying
+nothing, per frame, on a phone.
 
-Which it is cannot be settled from here, because one side of the trade is only
-audible. So it is a slider on the main screen, next to Timings, and the default
-stays at 5: at what has been shipping, not at a new guess. Move it, read
-something long, and look at the generation speed.
+It was shipped as a slider with the default left at 5, on the reasoning that one
+side of the trade is only audible and nobody here can hear it. The device
+answered: at one step the reading was reported closer to the same model on a
+desktop, *"maybe a little more expressive, or more inflection"*, and no worse. So
+the default is 1 now, and the slider stays for anyone who disagrees.
 
-How much time it can possibly buy is bounded, and worth knowing before reading
-the number. The steps multiply one graph in the bundle - `lm_flow`, 10 MB - and
-not the 76 MB `lm_main` that runs once per frame regardless. So the ceiling on
-the saving is whatever fraction of a frame the small model accounts for, and
-that fraction is exactly the thing nobody here has measured.
+How much time that can buy is bounded, and worth knowing before reading the
+number. The steps multiply one graph in the bundle - `lm_flow`, 10 MB - and not
+the 76 MB `lm_main` that runs once per frame regardless. So the ceiling on the
+saving is whatever fraction of a frame the small model accounts for, and that
+fraction is still unmeasured. One report called one step a touch *slower* to the
+first word, which cannot be a cost of doing less work; the `first=` figure on
+each chunk trace line is what settles it, and chunk timings on that device move
+by about 90 ms between identical runs anyway.
 
 `docs/direct-ort.md` scopes what running these graphs ourselves would involve,
-and starts from the same reading of the bundle.
+and starts from the same reading of the bundle. `docs/owning-the-pipeline.md`
+asks the wider version of the same question.
 
 ## When it crashes
 
