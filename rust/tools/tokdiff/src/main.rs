@@ -6,7 +6,9 @@ use std::io::{BufRead, Write};
 use sentencepiece_rs::SentencePieceProcessor;
 
 fn main() {
-    let model = std::env::args().nth(1).expect("usage: tokdiff <tokenizer.model>");
+    let model = std::env::args()
+        .nth(1)
+        .expect("usage: tokdiff <tokenizer.model>");
     let processor = SentencePieceProcessor::open(&model).expect("open tokenizer.model");
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
@@ -14,7 +16,11 @@ fn main() {
         let line = line.expect("read stdin");
         let text = decode_json_string(&line);
         let ids = processor.encode_to_ids(&text).expect("encode");
-        let joined = ids.iter().map(usize::to_string).collect::<Vec<_>>().join(" ");
+        let joined = ids
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(" ");
         writeln!(out, "{joined}").expect("write");
     }
 }
