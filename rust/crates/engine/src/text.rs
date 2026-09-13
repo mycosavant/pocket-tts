@@ -132,7 +132,7 @@ fn list_item_body(line: &str) -> Option<&str> {
 fn end_sentence(text: &str) -> String {
     let trimmed = text.trim_end();
     match trimmed.chars().last() {
-        Some(c) if matches!(c, '.' | '!' | '?' | ':' | '…') => trimmed.to_string(),
+        Some('.' | '!' | '?' | ':' | '…') => trimmed.to_string(),
         Some(_) => format!("{trimmed}."),
         None => String::new(),
     }
@@ -147,18 +147,19 @@ fn inline(text: &str) -> String {
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        if c == '!' && chars.get(i + 1) == Some(&'[') {
-            if let Some((_, end)) = link_at(&chars, i + 1) {
-                i = end;
-                continue;
-            }
+        if c == '!'
+            && chars.get(i + 1) == Some(&'[')
+            && let Some((_, end)) = link_at(&chars, i + 1)
+        {
+            i = end;
+            continue;
         }
-        if c == '[' {
-            if let Some((label, end)) = link_at(&chars, i) {
-                out.push_str(&inline(&label));
-                i = end;
-                continue;
-            }
+        if c == '['
+            && let Some((label, end)) = link_at(&chars, i)
+        {
+            out.push_str(&inline(&label));
+            i = end;
+            continue;
         }
         if c == '`' {
             let ticks = chars[i..].iter().take_while(|&&t| t == '`').count();
@@ -171,25 +172,25 @@ fn inline(text: &str) -> String {
                 continue;
             }
         }
-        if c == '<' {
-            if let Some(close) = chars[i..].iter().position(|&t| t == '>') {
-                let tag: String = chars[i + 1..i + close].iter().collect();
-                if tag.starts_with("http") {
-                    out.push_str(&url_host(&tag));
-                    i += close + 1;
-                    continue;
-                }
-                if tag
-                    .chars()
-                    .next()
-                    .is_some_and(|t| t.is_ascii_alphabetic() || t == '/')
-                {
-                    i += close + 1;
-                    continue;
-                }
+        if c == '<'
+            && let Some(close) = chars[i..].iter().position(|&t| t == '>')
+        {
+            let tag: String = chars[i + 1..i + close].iter().collect();
+            if tag.starts_with("http") {
+                out.push_str(&url_host(&tag));
+                i += close + 1;
+                continue;
+            }
+            if tag
+                .chars()
+                .next()
+                .is_some_and(|t| t.is_ascii_alphabetic() || t == '/')
+            {
+                i += close + 1;
+                continue;
             }
         }
-        if (c == 'h') && starts_with(&chars, i, "http://") || starts_with(&chars, i, "https://") {
+        if starts_with(&chars, i, "http://") || starts_with(&chars, i, "https://") {
             let end = (i..chars.len())
                 .find(|&j| chars[j].is_whitespace() || matches!(chars[j], ')' | ']' | '>' | '"'))
                 .unwrap_or(chars.len());

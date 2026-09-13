@@ -7,5 +7,8 @@ publish.workspace = true
 description = "Read text aloud in a Pocket TTS voice"
 
 [dependencies]
+cpal = "0.17"
 hound = "3.5"
 pocket-tts-engine = { path = "../engine" }
+sha2 = "0.10"
+ureq = "2.12"
