@@ -65,9 +65,12 @@ with 2 intra-op threads. First audio 280-450 ms. On a 168-word agent reply,
 executable runs relocated with nothing beside it, plays through WASAPI, and
 its WAV output was transcribed word for word.
 
-Not established: how it sounds next to the Android build or speech-kit (that
-needs ears), other languages, aarch64, and behaviour on a device whose default
-output format is not float, 16- or 32-bit integer.
+**By ear.** The maintainer listened to the Windows smoke tests: at least as
+good as speech-kit's implementation, as good as or better than the Android
+app, and every trailing short sentence articulated.
+
+Not established: other languages, aarch64, and behaviour on a device whose
+default output format is not float, 16- or 32-bit integer.
 
 ## Build
 
