@@ -77,10 +77,16 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties
 ./gradlew :app:testDebugUnitTest
 ```
 
-The debug APK lands in `app/build/outputs/apk/debug/`. It is about 60 MB, almost
-all of it the ONNX Runtime and sherpa-onnx native libraries for `arm64-v8a` and
-`armeabi-v7a`. Dropping `armeabi-v7a` from `abiFilters` in `app/build.gradle.kts`
-roughly halves that if you only care about 64-bit devices.
+The build compiles the engine from `../rust` first (`cargo ndk`, the
+`buildNative` task), so it needs rustup's `aarch64-linux-android`,
+`armv7-linux-androideabi` and `x86_64-linux-android` targets, `cargo-ndk` and
+the NDK. Pass `-PskipNative` to package the libraries already in
+`app/src/main/jniLibs`.
+
+The debug APK lands in `app/build/outputs/apk/debug/`. It is about 85 MB, most of
+it ONNX Runtime for `arm64-v8a`, `armeabi-v7a` and `x86_64`. Dropping ABIs from
+`abiFilters` in `app/build.gradle.kts` shrinks it. Until 2026-10-03 this said
+60 MB, with sherpa-onnx's libraries for two ABIs; see `docs/engine-swap.md`.
 
 ## The debug key is committed, on purpose
 
@@ -155,6 +161,10 @@ a Kotlin constant, so `BackupRulesTest` asserts the string still matches
 `ModelManager.MODEL_NAME`. Renaming the bundle would otherwise break the
 exclusion silently.
 
+**Since 2026-10-03 "Install from a file" is hidden and refuses**: the paragraph
+below describes sherpa-onnx's archive, which the new engine cannot read, and no
+archive of pocket-speak's bundle is defined yet (`docs/engine-swap.md`).
+
 "Install from a file" takes the same `.tar.bz2` as the download, streamed
 straight from the content URI - the unpacked model is already 200 MB and there
 is no reason to want another 98 MB beside it. It is checked for the expected
@@ -163,17 +173,23 @@ a working install working.
 
 ## First run
 
-The model is not in the APK. On first launch the app downloads
-`sherpa-onnx-pocket-tts-int8-2026-01-26` - a 98 MB download that unpacks to
-about 200 MB - into app storage. Voice prompts are a few hundred kilobytes each
-and are fetched the first time each voice is used.
+The model is not in the APK. On first launch the app downloads pocket-speak's
+`english_2026-04` bundle - six files, 125 MB, each checked against a pinned
+sha256 - into app storage. Each voice's embedding is about 6 MB and is fetched
+the first time that voice is used. (Until 2026-10-03 this was sherpa-onnx's
+98 MB `sherpa-onnx-pocket-tts-int8-2026-01-26`; the app deletes that directory
+once the new engine has loaded. See `docs/engine-swap.md`.)
 
-Inference runs on the CPU. Expect roughly real-time synthesis on a recent phone,
-which the streaming design hides well for continuous reading but does mean a
-short delay before the first words. It is not instant the way a small
-concatenative engine is.
+Inference runs on the CPU. On a Galaxy S25 it generates 3.7 to 5 times faster
+than real time, with the first audio of a chunk about 0.2 to 0.3 s after it is
+asked for. Until 2026-10-03 this said "roughly real-time", which was sherpa-onnx
+on an older phone.
 
 ## How it works
+
+**Since 2026-10-03 the engine is pocket-speak's Rust core, not sherpa-onnx**
+(`docs/engine-swap.md`). The sections below that describe sherpa-onnx's
+behaviour are the history of how the app got here, kept as written.
 
 ```
 selected text ──▶ ReadAloudActivity ─┐
@@ -182,7 +198,9 @@ scratchpad ─────▶ ScratchpadActivity ─┼─▶ Reader ─▶ Stre
 other apps ─────▶ PocketTtsService ───┘      ▼
                   (system TTS engine)   MarkdownSpeech ─▶ TextChunker ─▶ PocketTts
                                                                             │
-                                                                       sherpa-onnx
+                                                     NativeEngine (JNI) ─▶ rust/crates/engine
+                                                                            │
+                                                                  onnxruntime-android
 ```
 
 - `speech/MarkdownSpeech` turns Markdown into speakable prose.
@@ -356,6 +374,11 @@ sizing, so reaching RESUMED proves very little: the slider bug passed a version
 of these tests that stopped at `setup()`, because nothing had been laid out yet.
 
 ## The one thing here that cannot be fetched again
+
+**Since 2026-10-03 imported voices are hidden, not deleted.** The engine is
+conditioned on precomputed embeddings and has no encoder to make one from a wav,
+so the picker and the system voice list leave imports out until cloning returns
+(`docs/engine-swap.md`). The files stay where this section says.
 
 A model re-downloads and a setting is retyped in seconds. A voice somebody
 recorded exists in one directory and nowhere else, so the failure worth
@@ -848,6 +871,12 @@ Worth reading before shipping anything built from this.
   but its README states the export is for non-commercial use. Those two
   statements do not agree; treat the narrower one as binding until the exporter
   clarifies.
+- Since 2026-10-03 the app downloads that same exporter's `english_2026-04`
+  graphs directly (pinned in `ModelManager`), so the point above still applies.
+  Voice embeddings come from `kyutai/pocket-tts-without-voice-cloning`; read its
+  terms before redistributing them.
+- `app/src/main/java/sonic/Sonic.java` is Bill Cox's Sonic, Apache 2.0, vendored
+  unmodified. ONNX Runtime (`onnxruntime-android`) is MIT.
 - Voices have individual licences, listed per voice at
   [`kyutai/tts-voices`](https://huggingface.co/kyutai/tts-voices).
 - Pocket TTS's own prohibited-use terms apply, in particular the ban on cloning

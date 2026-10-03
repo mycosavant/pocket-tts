@@ -58,7 +58,7 @@ object ModelInstall {
      * already under way.
      *
      * Cancelling the caller does not cancel the download: it is shared, and one
-     * screen navigating away is not a decision to abandon 98 MB that other
+     * screen navigating away is not a decision to abandon 125 MB that other
      * callers may still be waiting on.
      */
     suspend fun ensure(context: Context): ModelManager.ModelFiles {
@@ -94,7 +94,13 @@ object ModelInstall {
     }
 
     internal var installer = Installer { context, progress ->
-        ModelManager(context).ensureModel(progress)
+        val manager = ModelManager(context)
+        manager.ensureModel(progress).also {
+            // A model with no voice cannot speak, and the first read may come
+            // with no network; fetch the selected voice's embedding now.
+            val voice = VoiceCatalog.byId(Settings(context).voiceId) ?: VoiceCatalog.default()
+            manager.ensureEmbedding(voice)
+        }
     }
 
     internal fun resetForTesting() {

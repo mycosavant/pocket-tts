@@ -33,6 +33,10 @@ class PocketTtsService : TextToSpeechService() {
 
     private val stopRequested = AtomicBoolean(false)
 
+    /** The request being synthesised, so [onStop] cancels that one and no other. */
+    @Volatile
+    private var current: NativeEngine.CancelToken? = null
+
     // The framework declares these protected, and they are widened here so
     // they can be called from a test. This is the surface other apps drive,
     // in whatever order they like, and it had no tests at all - which is a
@@ -102,18 +106,9 @@ class PocketTtsService : TextToSpeechService() {
             )
         }
 
-        // Voices the user cloned from their own audio show up alongside the
-        // stock ones, so any app's voice picker can select them.
-        ModelManager(this).importedVoices().forEach { file ->
-            voices += Voice(
-                file.nameWithoutExtension,
-                Locale.ENGLISH,
-                Voice.QUALITY_VERY_HIGH,
-                Voice.LATENCY_NORMAL,
-                false,
-                features,
-            )
-        }
+        // Voices cloned from the user's own audio are not listed: this engine
+        // cannot condition on a wav (PocketTts.loadVoiceFile), and offering
+        // one that then reads in another voice would be a false account.
         return voices
     }
 
@@ -131,6 +126,10 @@ class PocketTtsService : TextToSpeechService() {
 
     public override fun onStop() {
         stopRequested.set(true)
+        // Between frames rather than at the next decoded block, about a
+        // second of audio later. The token is this request's, so an in-app
+        // read sharing the engine is not stopped by it.
+        current?.cancel()
     }
 
     /**
@@ -168,7 +167,7 @@ class PocketTtsService : TextToSpeechService() {
             return
         }
 
-        // Downloading 98 MB inside a synthesis request would look like a hang to
+        // Downloading 125 MB inside a synthesis request would look like a hang to
         // whichever app asked for the speech, so fail and let the app's own
         // first-run screen fetch the model.
         if (!ModelManager(this).isModelInstalled) {
@@ -181,16 +180,24 @@ class PocketTtsService : TextToSpeechService() {
         // than the two of them taking turns sentence by sentence in two
         // different voices. See EngineTurn.
         val turn = EngineTurn.take()
+        var token: NativeEngine.CancelToken? = null
 
         try {
+            // Made before waiting for the engine, so a stop during the wait
+            // still lands on this request. Inside the try: loading the native
+            // library can fail, and that should be a synthesis error.
+            val cancel = NativeEngine.CancelToken().also { token = it; current = it }
             runBlocking {
                 val engine = PocketTts.get(this@PocketTtsService)
                 val voice = loadRequestedVoice(engine, request.voiceName ?: SELECTED_VOICE)
 
                 // SynthesisRequest reports the rate as a percentage, where 100
                 // is the user's normal speed.
+                // Applied by Sonic after generation (PocketTts.synthesize).
+                // Android's own slider runs 10% to 600%; past 3x speech stops
+                // being words, so the top is cut there.
                 val speed = (request.speechRate / 100f)
-                    .coerceIn(Settings.MIN_SPEED, Settings.MAX_SPEED)
+                    .coerceIn(Settings.MIN_SPEED, SYSTEM_MAX_SPEED)
                 val steps = settings.decodeSteps
                 // The same speaker draw the in-app reader uses - and this is
                 // the path most people spend their day in, since Select to
@@ -208,13 +215,17 @@ class PocketTtsService : TextToSpeechService() {
                     // and it costs one call - the offsets are only meaningful
                     // because the text above is passed through unrewritten.
                     callback.rangeStart(chunk.start, chunk.end, 0)
+                    // The chunk's speech, not its text: the same words, with a
+                    // trailing run of short sentences joined so the model does
+                    // not end early on them. Offsets above stay the text's.
                     val completed = engine.synthesize(
-                        chunk.text,
+                        chunk.speech,
                         voice,
                         speed,
                         steps,
                         temperature,
                         seed,
+                        cancel,
                     ) { samples ->
                         val giveUp = stopRequested.get() || EngineTurn.superseded(turn)
                         if (giveUp) false else deliver(callback, samples, maxBytes)
@@ -230,6 +241,9 @@ class PocketTtsService : TextToSpeechService() {
         } catch (error: Throwable) {
             Log.e(TAG, "Synthesis failed", error)
             callback.error(TextToSpeech.ERROR_SYNTHESIS)
+        } finally {
+            current = null
+            token?.close()
         }
     }
 
@@ -246,10 +260,7 @@ class PocketTtsService : TextToSpeechService() {
             VoiceTrace.resolved("system", requested, name, manager.voiceFile(name).length(), stock.bytes)
             return engine.loadVoice(stock)
         }
-        resolveVoiceFile(name)?.let { file ->
-            VoiceTrace.resolved("system", requested, name, file.length(), 0)
-            return engine.loadVoiceFile(name, file)
-        }
+        // An imported voice falls through: see onGetVoices.
         val fallback = VoiceCatalog.default()
         VoiceTrace.resolved(
             caller = "system",
@@ -270,7 +281,7 @@ class PocketTtsService : TextToSpeechService() {
             // to disagree in the first place.
             return manager.cachedVoice(stock) ?: manager.voiceFile(name)
         }
-        return manager.voiceFile(name).takeIf { it.isFile }
+        return null
     }
 
     /**
@@ -316,6 +327,7 @@ class PocketTtsService : TextToSpeechService() {
         const val SELECTED_VOICE = "selected"
         const val ISO3_ENGLISH = "eng"
         const val SAMPLE_RATE_FALLBACK = 24000
+        const val SYSTEM_MAX_SPEED = 3.0f
         val supportedCountries = listOf("USA", "GBR")
     }
 }

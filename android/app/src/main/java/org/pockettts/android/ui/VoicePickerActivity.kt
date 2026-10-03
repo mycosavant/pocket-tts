@@ -70,6 +70,8 @@ class VoicePickerActivity : AppCompatActivity() {
         binding.voiceList.adapter = adapter
         observeSamples()
 
+        // Hidden until cloning returns; see entries().
+        binding.importButton.visibility = android.view.View.GONE
         binding.importButton.setOnClickListener {
             pickWav.launch(arrayOf("audio/wav", "audio/x-wav", "audio/*"))
         }
@@ -114,10 +116,9 @@ class VoicePickerActivity : AppCompatActivity() {
                 Locale.forLanguageTag(voice.language).displayName,
             )
         }
-        val imported = ModelManager(this).importedVoices().map { file ->
-            Entry(file.nameWithoutExtension, file.nameWithoutExtension, getString(R.string.import_voice))
-        }
-        return stock + imported
+        // Imported voices are not offered while the engine cannot clone
+        // (PocketTts.loadVoiceFile); their files are kept for when it can.
+        return stock
     }
 
     private fun importVoice(uri: Uri) {

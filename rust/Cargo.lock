@@ -898,6 +898,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pocket-tts-android"
+version = "0.1.0"
+dependencies = [
+ "jni",
+ "ort",
+ "pocket-tts-engine",
+]
+
+[[package]]
 name = "pocket-tts-engine"
 version = "0.1.0"
 dependencies = [
