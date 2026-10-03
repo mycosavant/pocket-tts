@@ -16,11 +16,15 @@
 //!
 //! A panic never crosses into the JVM: each entry point that can fail catches
 //! it and throws `IllegalStateException` instead, so a bug costs a failed read
-//! rather than the process.
+//! rather than the process. A panic inside `synthesize` poisons the engine's
+//! mutex; the next call takes the engine anyway, because its state between
+//! chunks is the sessions and the random generator, which a panicked chunk
+//! leaves usable, and refusing every later read would silence TalkBack until
+//! the process died.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JFloatArray, JObject, JString, JValue};
@@ -120,10 +124,10 @@ pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeSamp
     raw: jlong,
 ) -> jint {
     guarded(&mut env, 24_000, |_| {
-        engine(raw)
+        Ok(engine(raw)
             .lock()
-            .map(|e| e.sample_rate() as jint)
-            .map_err(|_| "engine lock poisoned".to_string())
+            .unwrap_or_else(PoisonError::into_inner)
+            .sample_rate() as jint)
     })
 }
 
@@ -137,7 +141,7 @@ pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeLoad
 ) -> jlong {
     guarded(&mut env, 0, |env| {
         let path = string(env, &path)?;
-        let engine = engine(raw).lock().map_err(|_| "engine lock poisoned".to_string())?;
+        let engine = engine(raw).lock().unwrap_or_else(PoisonError::into_inner);
         let voice = engine.load_voice(Path::new(&path)).map_err(|e| e.to_string())?;
         Ok(Box::into_raw(Box::new(voice)) as jlong)
     })
@@ -219,7 +223,7 @@ pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeSynt
             // after the synthesis it was handed to has returned.
             unsafe { &*(token as *const Cancel) }.clone()
         };
-        let mut engine = engine(raw).lock().map_err(|_| "engine lock poisoned".to_string())?;
+        let mut engine = engine(raw).lock().unwrap_or_else(PoisonError::into_inner);
         engine.set_temperature(temperature);
         if seed >= 0 {
             engine.set_seed(seed as u64);
