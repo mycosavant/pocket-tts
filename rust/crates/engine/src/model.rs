@@ -293,6 +293,13 @@ impl Engine {
 
     /// Synthesises one chunk, handing samples to `sink` as they are decoded.
     /// `sink` returning `false` stops generation.
+    ///
+    /// Keeps no per-chunk state on `self`: the flow and decoder states are
+    /// built fresh from `voice` and the manifest on each call. So a call that
+    /// errs or panics leaves the engine as it found it, except that the
+    /// random generator has advanced. The Android JNI crate relies on this to
+    /// keep reading after a panic; caching state across chunks here would
+    /// break that.
     pub fn synthesize(
         &mut self,
         text: &str,

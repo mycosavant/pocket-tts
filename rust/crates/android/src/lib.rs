@@ -15,16 +15,17 @@
 //! app and opened here by name (ort's `load-dynamic`), once per process.
 //!
 //! A panic never crosses into the JVM: each entry point that can fail catches
-//! it and throws `IllegalStateException` instead, so a bug costs a failed read
-//! rather than the process. A panic inside `synthesize` poisons the engine's
-//! mutex; the next call takes the engine anyway, because its state between
-//! chunks is the sessions and the random generator, which a panicked chunk
-//! leaves usable, and refusing every later read would silence TalkBack until
+//! it and throws `IllegalStateException` instead, so a Rust panic in the
+//! engine costs a failed read rather than the process. A fault inside ONNX
+//! Runtime's native code is not a panic and is not caught. A panic inside
+//! `synthesize` poisons the engine's mutex; [`lock`] takes the engine anyway,
+//! because `Engine::synthesize` keeps no per-chunk state on the engine (its
+//! doc says so), and refusing every later read would silence TalkBack until
 //! the process died.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JFloatArray, JObject, JString, JValue};
@@ -78,11 +79,14 @@ fn string(env: &mut JNIEnv, value: &JString) -> Result<String, String> {
         .map_err(|e| format!("string argument: {e}"))
 }
 
-fn engine<'a>(raw: jlong) -> &'a Mutex<Engine> {
+/// The engine behind `raw`, locked, poisoned or not (see the module doc).
+/// Every entry point locks it through here, so none refuses after a panic.
+fn lock<'a>(raw: jlong) -> MutexGuard<'a, Engine> {
     // SAFETY: `raw` came from nativeLoad. The app loads one engine per process
     // and never frees it (NativeEngine.close has no caller), so it outlives
     // every call made on it.
-    unsafe { &*(raw as *const Mutex<Engine>) }
+    let engine = unsafe { &*(raw as *const Mutex<Engine>) };
+    engine.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Loads the model in `model_dir`, opening ONNX Runtime from `ort_library`
@@ -123,12 +127,7 @@ pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeSamp
     _class: JClass,
     raw: jlong,
 ) -> jint {
-    guarded(&mut env, 24_000, |_| {
-        Ok(engine(raw)
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .sample_rate() as jint)
-    })
+    guarded(&mut env, 24_000, |_| Ok(lock(raw).sample_rate() as jint))
 }
 
 /// Loads a voice embedding (`.safetensors`).
@@ -141,8 +140,10 @@ pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeLoad
 ) -> jlong {
     guarded(&mut env, 0, |env| {
         let path = string(env, &path)?;
-        let engine = engine(raw).lock().unwrap_or_else(PoisonError::into_inner);
-        let voice = engine.load_voice(Path::new(&path)).map_err(|e| e.to_string())?;
+        let engine = lock(raw);
+        let voice = engine
+            .load_voice(Path::new(&path))
+            .map_err(|e| e.to_string())?;
         Ok(Box::into_raw(Box::new(voice)) as jlong)
     })
 }
@@ -223,7 +224,7 @@ pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeSynt
             // after the synthesis it was handed to has returned.
             unsafe { &*(token as *const Cancel) }.clone()
         };
-        let mut engine = engine(raw).lock().unwrap_or_else(PoisonError::into_inner);
+        let mut engine = lock(raw);
         engine.set_temperature(temperature);
         if seed >= 0 {
             engine.set_seed(seed as u64);
@@ -258,7 +259,9 @@ pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeSynt
             stats.end,
             stats.samples,
             stats.generation_ms,
-            stats.first_audio_ms.map_or("null".into(), |f| f.to_string()),
+            stats
+                .first_audio_ms
+                .map_or("null".into(), |f| f.to_string()),
         );
         env.new_string(json)
             .map(|s| s.into_raw())
