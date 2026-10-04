@@ -3,9 +3,9 @@ name: Android
 on:
   push:
     branches: [ main ]
-    paths: [ 'android/**', '.github/workflows/android.yml' ]
+    paths: [ 'android/**', 'rust/**', '.github/workflows/android.yml' ]
   pull_request:
-    paths: [ 'android/**', '.github/workflows/android.yml' ]
+    paths: [ 'android/**', 'rust/**', '.github/workflows/android.yml' ]
 
 jobs:
   build:
@@ -17,10 +17,33 @@ jobs:
       with:
         distribution: temurin
         java-version: '17'
+    # The action's default package list includes `tools`, which current
+    # cmdline-tools no longer resolve, so sdkmanager exits 1 before anything
+    # builds. platform-tools is all the default list added that still exists.
     - name: Set up Android SDK
       uses: android-actions/setup-android@v3
+      with:
+        packages: platform-tools
     - name: Set up Gradle
       uses: gradle/actions/setup-gradle@v4
+    # The APK carries pocket-speak's engine, which Gradle's buildNative task
+    # compiles from ../rust with cargo-ndk. The runner image ships an NDK;
+    # cargo-ndk finds it through ANDROID_NDK_HOME.
+    - name: Set up Rust for Android
+      run: |
+        rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+        echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: rust
+    - name: Install cargo-ndk
+      run: cargo install --locked cargo-ndk
+    # Gradle would run this itself before the first task below; doing it as
+    # its own step puts a Rust failure under a Rust heading. Later Gradle
+    # steps find the libraries current and cargo does nothing.
+    - name: Build the engine for each ABI
+      working-directory: android
+      run: ./gradlew --no-daemon :app:buildNative
     - name: Run unit tests
       working-directory: android
       run: ./gradlew --no-daemon :app:testDebugUnitTest
@@ -53,11 +76,22 @@ jobs:
       working-directory: android
       run: ./gradlew --no-daemon :app:assembleRelease
 
-    - name: Check the JNI audio callback survived shrinking
+    - name: Check the JNI methods the engine calls survived shrinking
       working-directory: android
       run: |
         ./tools/check-jni-callback.sh app/build/outputs/apk/debug/app-debug.apk
         ./tools/check-jni-callback.sh app/build/outputs/apk/release/app-release.apk
+
+    # An APK without the engine installs, opens, and fails on the first read.
+    - name: Check the engine is packaged for every ABI
+      working-directory: android/app/build/outputs/apk
+      run: |
+        for apk in debug/app-debug.apk release/app-release.apk; do
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            unzip -l "$apk" | grep -q "lib/$abi/libpocket_tts_jni.so" \
+              || { echo "$apk has no lib/$abi/libpocket_tts_jni.so"; exit 1; }
+          done
+        done
 
     # A runner has no ~/.android/debug.keystore, so before the key was
     # committed the plugin generated a new one per run and every artefact this

@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 #
-# Fails if the streaming audio callback is missing from a built APK.
+# Fails if a built APK is missing a method pocket-speak's engine finds by name.
 #
-# sherpa-onnx resolves that callback from native code by name and exact
-# signature - GetMethodID(cls, "invoke", "([F)Ljava/lang/Integer;") - so
-# nothing in Kotlin references the descriptor and nothing in Kotlin breaks
-# when it disappears. It has disappeared twice, by two different mechanisms:
-# D8 desugaring a lambda into a class carrying only the erased bridge, and R8
-# inlining the specialised method into that bridge. Both compiled cleanly and
-# passed every test.
+# rust/crates/android resolves these from native code, so nothing in Kotlin
+# breaks when they disappear:
 #
-# The only place the answer exists is the built artefact, so that is what this
-# reads. Usage:
+#   - NativeEngine's native methods, which the loader binds to the exported
+#     Java_org_pockettts_android_engine_NativeEngine_* symbols by name;
+#   - Sink.onAudio, which the engine calls per chunk with
+#     call_method(sink, "onAudio", "([F)Z").
+#
+# R8 renaming or inlining any of them compiles cleanly and passes every test.
+# Under sherpa-onnx its audio callback vanished twice that way, by two
+# different mechanisms. The only place the answer exists is the built
+# artefact, so that is what this reads. Usage:
 #
 #   tools/check-jni-callback.sh app/build/outputs/apk/release/app-release.apk
 #
@@ -28,21 +30,33 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 unzip -q -o "$apk" 'classes*.dex' -d "$work"
 
-# The declaration line, not a call site: a call site can survive in one dex
+# Declarations only, as "name type" pairs: a call site can survive in one dex
 # while the method it names is gone from all of them.
-declaration="type[[:space:]]*:[[:space:]]*'\(\[F\)Ljava/lang/Integer;'"
-
-found=0
 for dex in "$work"/classes*.dex; do
-    n="$("$dexdump" -d "$dex" 2>/dev/null | grep -cE "$declaration" || true)"
-    found=$((found + n))
+    "$dexdump" -d "$dex" 2>/dev/null
+done | awk -F"'" '
+    /^ *name *:/ { name = $2; next }
+    /^ *type *:/ && name != "" { print name, $2; name = "" }
+' | sort -u > "$work/declared"
+
+missing=()
+for want in \
+    "onAudio ([F)Z" \
+    "nativeLoad (Ljava/lang/String;ILjava/lang/String;)J" \
+    nativeFree nativeSampleRate nativeLoadVoice nativeFreeVoice \
+    nativeNewCancel nativeCancel nativeFreeCancel nativeSynthesize; do
+    case "$want" in
+        *" "*) grep -qxF "$want" "$work/declared" || missing+=("$want") ;;
+        *) grep -q "^$want " "$work/declared" || missing+=("$want") ;;
+    esac
 done
 
-if [ "$found" -eq 0 ]; then
-    echo "FAIL: $(basename "$apk") declares no invoke([F)Ljava/lang/Integer;" >&2
-    echo "      sherpa-onnx cannot resolve its audio callback, so this build" >&2
-    echo "      synthesises silently and then fails. Check proguard-rules.pro." >&2
+if [ "${#missing[@]}" -gt 0 ]; then
+    echo "FAIL: $(basename "$apk") does not declare:" >&2
+    printf '      %s\n' "${missing[@]}" >&2
+    echo "      The engine cannot reach them from native code, so this build" >&2
+    echo "      fails on the first read. Check proguard-rules.pro." >&2
     exit 1
 fi
 
-echo "OK: $(basename "$apk") declares invoke([F)Ljava/lang/Integer; ($found)"
+echo "OK: $(basename "$apk") declares onAudio([F)Z and all nine native methods"
