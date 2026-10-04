@@ -296,7 +296,7 @@ object Reader {
      * How the reader obtains an engine and a sink.
      *
      * Swapped in tests for fakes. Without this the reader can only be exercised
-     * with a 98 MB model and real audio hardware, which is why its state
+     * with a 125 MB model and real audio hardware, which is why its state
      * machine - the part that has repeatedly been wrong - had no tests, and why
      * `ActivityLaunchTest` was quietly downloading the model on every run.
      */

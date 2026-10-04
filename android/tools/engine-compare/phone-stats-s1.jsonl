@@ -1,0 +1,17 @@
+{"load_ms":428}
+{"chunk":0,"tokens":14,"frames":40,"end":"EndOfSpeech","audio_ms":3200,"generation_ms":713,"first_audio_ms":273}
+{"chunk":1,"tokens":20,"frames":48,"end":"EndOfSpeech","audio_ms":3840,"generation_ms":773,"first_audio_ms":224}
+{"chunk":2,"tokens":5,"frames":17,"end":"EndOfSpeech","audio_ms":1360,"generation_ms":317,"first_audio_ms":220}
+{"chunk":3,"tokens":8,"frames":27,"end":"EndOfSpeech","audio_ms":2160,"generation_ms":458,"first_audio_ms":207}
+{"chunk":4,"tokens":5,"frames":18,"end":"EndOfSpeech","audio_ms":1440,"generation_ms":346,"first_audio_ms":225}
+{"chunk":5,"tokens":5,"frames":19,"end":"EndOfSpeech","audio_ms":1520,"generation_ms":364,"first_audio_ms":231}
+{"chunk":6,"tokens":24,"frames":70,"end":"EndOfSpeech","audio_ms":5600,"generation_ms":1156,"first_audio_ms":224}
+{"chunk":7,"tokens":26,"frames":88,"end":"EndOfSpeech","audio_ms":7040,"generation_ms":1433,"first_audio_ms":223}
+{"chunk":8,"tokens":8,"frames":20,"end":"EndOfSpeech","audio_ms":1600,"generation_ms":366,"first_audio_ms":223}
+{"chunk":9,"tokens":93,"frames":193,"end":"EndOfSpeech","audio_ms":15440,"generation_ms":3436,"first_audio_ms":247}
+{"chunk":10,"tokens":115,"frames":229,"end":"EndOfSpeech","audio_ms":18320,"generation_ms":4241,"first_audio_ms":270}
+{"chunk":11,"tokens":28,"frames":68,"end":"EndOfSpeech","audio_ms":5440,"generation_ms":1153,"first_audio_ms":231}
+{"chunk":12,"tokens":70,"frames":141,"end":"EndOfSpeech","audio_ms":11280,"generation_ms":2458,"first_audio_ms":242}
+{"chunk":13,"tokens":61,"frames":126,"end":"EndOfSpeech","audio_ms":10080,"generation_ms":2139,"first_audio_ms":244}
+FORTIFY: pthread_mutex_lock called on a destroyed mutex (0x727ff92c9c)
+Aborted 

@@ -15,6 +15,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import android.view.MotionEvent
+import android.view.View
 import android.widget.TextView
 import com.google.android.material.slider.Slider
 import org.pockettts.android.R
@@ -153,26 +154,29 @@ class ActivityLaunchTest {
         // doing nothing, so a slider that is only laid out is not evidence of
         // anything. This reads the stored value back off the control and then
         // drives the control and reads the store.
+        //
+        // Decode steps meant something only to sherpa-onnx and are hidden
+        // since the engine swap; speed is the engine slider that acts now.
         val settings = Settings(ApplicationProvider.getApplicationContext())
-        settings.decodeSteps = 2
+        settings.speed = 1.5f
 
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             val activity = controller.get()
             layOut(activity)
-            val slider = activity.findViewById<Slider>(R.id.stepsSlider)
-            val label = activity.findViewById<TextView>(R.id.stepsLabel)
+            assertEquals(View.GONE, activity.findViewById<Slider>(R.id.stepsSlider).visibility)
+            assertEquals(View.GONE, activity.findViewById<TextView>(R.id.stepsLabel).visibility)
+            val slider = activity.findViewById<Slider>(R.id.speedSlider)
+            val label = activity.findViewById<TextView>(R.id.speedLabel)
 
-            assertEquals("the slider ignored the stored value", 2f, slider.value, 0f)
-            assertTrue("the label did not say the value: ${label.text}", "2" in label.text)
+            assertEquals("the slider ignored the stored value", 1.5f, slider.value, 0.001f)
+            assertTrue("the label did not say the value: ${label.text}", "1.50" in label.text)
 
             // Through a touch rather than by calling the listener, because the
-            // listener only acts on user changes - which is what stops
-            // rendering the screen from rewriting the settings, and is also
-            // exactly the branch a direct call would skip.
+            // listener only acts on user changes.
             drag(slider, toFraction = 1f)
 
-            assertEquals("dragging the slider did not reach the settings", 8, settings.decodeSteps)
-            assertTrue("the label did not follow: ${label.text}", "8" in label.text)
+            assertEquals("dragging the slider did not reach the settings", 2.0f, settings.speed, 0.001f)
+            assertTrue("the label did not follow: ${label.text}", "2.00" in label.text)
         }
     }
 

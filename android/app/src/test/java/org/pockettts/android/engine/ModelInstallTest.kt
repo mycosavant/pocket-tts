@@ -36,12 +36,8 @@ class ModelInstallTest {
 
     private fun fakeFiles(): ModelManager.ModelFiles {
         val dir = File(context.filesDir, "fake").apply { mkdirs() }
-        fun f(name: String) = File(dir, name).apply { writeText("x") }
-        return ModelManager.ModelFiles(
-            f("lm_flow.onnx"), f("lm_main.onnx"), f("encoder.onnx"),
-            f("decoder.onnx"), f("text_conditioner.onnx"),
-            f("vocab.json"), f("token_scores.json"),
-        )
+        ModelManager.MODEL_FILES.forEach { (name, _) -> File(dir, name).writeText("x") }
+        return ModelManager.ModelFiles(dir)
     }
 
     @Before

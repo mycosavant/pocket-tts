@@ -6,7 +6,7 @@ import android.content.Context
  * The synthesis half of reading, behind an interface the reader can be tested against.
  *
  * `Reader` used to build `PocketTts` and `StreamingPlayer` itself, which meant
- * nothing in this package could be exercised without a 98 MB model and real
+ * nothing in this package could be exercised without a 125 MB model and real
  * audio hardware. Two consequences, both bad: the reader's state machine - the
  * part that has actually been wrong - had no tests at all, and
  * `ActivityLaunchTest` reached `ensureModel`, so the unit suite downloaded the

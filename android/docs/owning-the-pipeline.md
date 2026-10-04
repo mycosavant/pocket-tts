@@ -1,5 +1,8 @@
 # Owning the pipeline, not the inference
 
+**Built 2026-10-03 as the Rust core under the app: see `engine-swap.md`.** The
+rest of this page is the reasoning as it stood, left as written.
+
 A position, not a plan of record. Nothing here is built, and the next thing to
 build is probably still nothing. It exists so that the question "should this be
 one project instead of three" has a written answer to argue with.

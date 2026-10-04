@@ -63,6 +63,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
         observeInstall()
+        // Decode steps meant something to sherpa-onnx; pocket-speak's engine
+        // decodes in one step. Installing from a file took sherpa's archive.
+        // Both hidden rather than left doing nothing.
+        binding.stepsSlider.visibility = android.view.View.GONE
+        binding.stepsLabel.visibility = android.view.View.GONE
+        binding.installButton.visibility = android.view.View.GONE
         binding.installButton.setOnClickListener {
             // Any type: the bundle arrives as a .tar.bz2 that most file
             // providers report as application/octet-stream, or as nothing at

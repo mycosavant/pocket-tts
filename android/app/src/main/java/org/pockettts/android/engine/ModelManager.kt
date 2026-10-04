@@ -4,23 +4,23 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
-import java.io.BufferedInputStream
 import java.io.File
 import java.io.IOException
-import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
 /**
  * Fetches the Pocket TTS weights and voice prompts onto the device.
  *
- * The int8 model bundle is a 98 MB download that unpacks to about 200 MB,
- * which is more than anyone wants inside an APK, so it is fetched on first run
- * and kept in app storage. Voice prompts are a few hundred kilobytes each and
- * are fetched lazily, the first time a voice is actually used.
+ * The model is pocket-speak's bundle - the same pinned files the desk CLI
+ * installs, 125 MB of int8 ONNX graphs, a tokenizer and a `bundle.json` - so
+ * it is fetched on first run and kept in app storage, each file checked
+ * against its sha256 before it is kept. A voice is a precomputed embedding of
+ * about 6 MB, fetched the first time it is used; the reference wav beside it
+ * is only the preview the picker plays.
  */
 class ModelManager(private val context: Context) {
 
@@ -32,6 +32,7 @@ class ModelManager(private val context: Context) {
     private val root: File get() = File(context.filesDir, "pocket-tts")
     val modelDir: File get() = File(root, MODEL_NAME)
     private val voiceDir: File get() = File(root, "voices")
+    private val embeddingDir: File get() = File(modelDir, "embeddings")
 
     /**
      * Imported voices, kept apart from the downloaded ones.
@@ -46,126 +47,119 @@ class ModelManager(private val context: Context) {
 
     val isModelInstalled: Boolean get() = resolveModelOrNull() != null
 
+    /** The directory holding [MODEL_FILES], once every one of them is present. */
+    data class ModelFiles(val dir: File)
+
+    fun resolveModelOrNull(): ModelFiles? =
+        ModelFiles(modelDir).takeIf { MODEL_FILES.all { (name, _) -> File(modelDir, name).isFile } }
+
     /**
-     * The five ONNX graphs and two JSON files sherpa-onnx needs. Resolved by
-     * suffix rather than by exact path so that a bundle with a different
-     * directory layout, or int8 variants of only some graphs, still works.
+     * Downloads the model files that are missing. Safe to call when installed.
+     *
+     * One file at a time into a `.part` beside it, checked against its pinned
+     * sha256 and renamed into place only if it matches, so a directory that
+     * [resolveModelOrNull] accepts holds only verified files. A partial
+     * download survives a dropped connection and resumes; a file that finishes
+     * with the wrong hash is deleted, because resuming it cannot fix it.
      */
-    data class ModelFiles(
-        val lmFlow: File,
-        val lmMain: File,
-        val encoder: File,
-        val decoder: File,
-        val textConditioner: File,
-        val vocabJson: File,
-        val tokenScoresJson: File,
-    )
-
-    fun resolveModelOrNull(): ModelFiles? = resolveModelIn(modelDir)
-
-    private fun resolveModelIn(directory: File): ModelFiles? {
-        if (!directory.isDirectory) return null
-        val files = directory.walkTopDown().filter { it.isFile }.toList()
-        if (files.isEmpty()) return null
-
-        fun pick(vararg stems: String): File? {
-            // Prefer an int8 graph when both are present: it is a third of the
-            // size and materially faster on a phone CPU.
-            val candidates = files.filter { file ->
-                val name = file.name.lowercase()
-                (name.endsWith(".onnx") || name.endsWith(".json")) &&
-                    stems.any { name.startsWith(it) || name.contains(it) }
-            }
-            return candidates.firstOrNull { it.name.contains("int8") } ?: candidates.firstOrNull()
-        }
-
-        val lmFlow = pick("lm_flow", "flow_lm") ?: return null
-        val lmMain = pick("lm_main", "flow_lm_main") ?: return null
-        val encoder = pick("encoder", "mimi_encoder") ?: return null
-        val decoder = pick("decoder", "mimi_decoder") ?: return null
-        val textConditioner = pick("text_conditioner") ?: return null
-        val vocab = files.firstOrNull { it.name.lowercase().startsWith("vocab") } ?: return null
-        val scores = files.firstOrNull { it.name.lowercase().contains("token_scores") } ?: return null
-
-        return ModelFiles(lmFlow, lmMain, encoder, decoder, textConditioner, vocab, scores)
-    }
-
-    /** Downloads and unpacks the model bundle. Safe to call when already installed. */
     suspend fun ensureModel(progress: ProgressListener? = null): ModelFiles =
         withContext(Dispatchers.IO) {
             resolveModelOrNull()?.let { return@withContext it }
-
-            root.mkdirs()
-            val archive = File(root, "$MODEL_NAME.tar.bz2.part")
-            val staging = File(root, "$MODEL_NAME.staging")
-            staging.deleteRecursively()
-
-            // The partial download survives a network failure on purpose: at
-            // 98 MB over a connection that drops, deleting it means starting
-            // from zero every time, which on a bad line never finishes at all.
-            download(URL(MODEL_URL), archive, progress)
-
-            try {
-                extractTarBz2(archive, staging)
-                // Rename last, so an interrupted download never leaves a
-                // half-unpacked directory that looks installed.
-                modelDir.deleteRecursively()
-                if (!staging.renameTo(modelDir)) {
-                    throw IOException("Could not move unpacked model into place")
+            modelDir.mkdirs()
+            val missing = MODEL_FILES.filter { (name, _) -> !File(modelDir, name).isFile }
+            missing.forEachIndexed { index, (name, sha) ->
+                val share = 1f / missing.size
+                fetchVerified(URL("$BUNDLE_URL/$name"), File(modelDir, name), sha) { fraction ->
+                    progress?.onProgress(if (fraction < 0) -1f else (index + fraction) * share)
                 }
-                archive.delete()
-            } catch (error: Throwable) {
-                // An archive that will not unpack is not worth resuming - it is
-                // truncated, or it is not what we think it is. A slow retry
-                // beats a fast failure repeated forever.
-                archive.delete()
-                throw error
-            } finally {
-                staging.deleteRecursively()
             }
-
-            resolveModelOrNull() ?: throw IOException(
-                "Model bundle unpacked but the expected ONNX files were not found in $modelDir",
-            )
+            resolveModelOrNull() ?: throw IOException("Model files missing from $modelDir after download")
         }
 
     /**
-     * Installs the model from a bundle already on the device.
-     *
-     * The download is 98 MB and the app's whole point is that it works offline,
-     * so requiring a network round trip to get started is a poor first
-     * impression - and after an uninstall that discarded the model, an
-     * infuriating one. Anyone who has the release archive on a laptop can copy
-     * it across and point at it here.
-     *
-     * The same tar.bz2 as the download, streamed straight from the content URI
-     * rather than copied to a temporary file first: the unpacked model is
-     * already ~200 MB and there is no reason to want another 98 MB alongside it.
+     * Deletes sherpa-onnx's model, about 200 MB unpacked, once this engine has
+     * loaded from its own files. An upgraded install otherwise carries both.
      */
-    suspend fun installFromArchive(uri: Uri): ModelFiles = withContext(Dispatchers.IO) {
-        root.mkdirs()
-        val staging = File(root, "$MODEL_NAME.staging")
-        staging.deleteRecursively()
-        try {
-            val stream = context.contentResolver.openInputStream(uri)
-                ?: throw IOException("Could not read that file")
-            stream.use { extractTarBz2(it, staging) }
-
-            // Checked before anything is replaced: pointing at the wrong
-            // archive should leave a working install working.
-            if (resolveModelIn(staging) == null) {
-                throw IOException("That archive does not contain a Pocket TTS model")
-            }
-            modelDir.deleteRecursively()
-            if (!staging.renameTo(modelDir)) {
-                throw IOException("Could not move the unpacked model into place")
-            }
-        } finally {
-            staging.deleteRecursively()
+    fun removeRetiredModel() {
+        listOf(
+            File(root, RETIRED_MODEL_NAME),
+            // An interrupted download and unpack of it, up to 98 MB.
+            File(root, "$RETIRED_MODEL_NAME.tar.bz2.part"),
+            File(root, "$RETIRED_MODEL_NAME.staging"),
+        ).filter { it.exists() }.forEach {
+            if (it.deleteRecursively()) Log.i(TAG, "Removed the retired model's $it")
         }
-
-        resolveModelOrNull() ?: throw IOException("The model unpacked but its files were not found")
     }
+
+    private fun fetchVerified(url: URL, target: File, sha256: String, progress: ProgressListener?) {
+        val part = File(target.parentFile, "${target.name}.part")
+        download(url, part, progress)
+        val actual = sha256Of(part)
+        if (actual != sha256) {
+            part.delete()
+            throw IOException("${target.name}: sha256 $actual, expected $sha256")
+        }
+        if (!part.renameTo(target)) {
+            // Verified but stuck: left in place it would be resumed past its
+            // end next time, so it goes and the next attempt starts clean.
+            part.delete()
+            throw IOException("Could not move ${target.name} into place")
+        }
+    }
+
+    private fun sha256Of(file: File): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(1 shl 16)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * The embedding for a stock [voice], downloaded and verified on first use.
+     */
+    suspend fun ensureEmbedding(
+        voice: VoiceCatalog.Voice,
+        progress: ProgressListener? = null,
+    ): File = withContext(Dispatchers.IO) {
+        // One download per voice at a time: the reader and the system engine
+        // can both ask for an uncached voice at once, and two writers on one
+        // `.part` produce a file that is neither.
+        embeddingLocks.computeIfAbsent(voice.id) { Mutex() }.withLock {
+            embeddingDir.mkdirs()
+            val target = File(embeddingDir, "${voice.id}.safetensors")
+            // A file on disk is checked once per process before it is
+            // trusted. "Any file in the right place counts as cached" is the
+            // mistake ensureVoice's doc below records; 6 MB hashes in tens of
+            // milliseconds.
+            if (target.isFile) {
+                if (voice.id in verifiedEmbeddings) return@withLock target
+                if (sha256Of(target) == voice.embeddingSha256) {
+                    verifiedEmbeddings += voice.id
+                    return@withLock target
+                }
+                Log.w(TAG, "Embedding for ${voice.id} does not match its pin; fetching it again")
+                target.delete()
+            }
+            fetchVerified(URL("$EMBEDDINGS_URL/${voice.id}.safetensors"), target, voice.embeddingSha256, progress)
+            verifiedEmbeddings += voice.id
+            target
+        }
+    }
+
+    /**
+     * Installing from a local archive took sherpa-onnx's tar.bz2, which the
+     * pocket-speak engine cannot read. Refused with that reason until an
+     * archive of this bundle is defined; the download is the way in.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun installFromArchive(uri: Uri): ModelFiles =
+        throw IOException("Installing from an archive is not supported by this engine yet; use Download")
 
     /**
      * Downloads a voice prompt if it is not already cached, and returns it.
@@ -287,8 +281,8 @@ class ModelManager(private val context: Context) {
     /**
      * Fetches [url] into [target], continuing an earlier attempt if there is one.
      *
-     * The bundle is 98 MB. Without a `Range` request a drop at 90 MB throws
-     * away 90 MB, and on a connection that drops regularly the download never
+     * The bundle is 125 MB. Without a `Range` request a drop at 120 MB throws
+     * away 120 MB, and on a connection that drops regularly the download never
      * completes at all - each attempt simply gets a different distance through
      * the same first stretch.
      */
@@ -318,6 +312,10 @@ class ModelManager(private val context: Context) {
                 // 206 means the server honoured the range and is sending the
                 // rest. 200 means it ignored it and is sending the whole file,
                 // so whatever was already there has to go.
+                // 416 on a resume: the part already holds the whole file (the
+                // process died between the last byte and the rename). Done;
+                // the caller's sha256 check decides whether it is kept.
+                if (code == 416 && have > 0) return
                 val resuming = code == HttpURLConnection.HTTP_PARTIAL && have > 0
                 if (code != HttpURLConnection.HTTP_OK && !resuming) {
                     throw IOException("HTTP $code fetching $current")
@@ -356,44 +354,34 @@ class ModelManager(private val context: Context) {
         }
     }
 
-    private fun extractTarBz2(archive: File, destination: File) =
-        archive.inputStream().use { extractTarBz2(it, destination) }
-
-    private fun extractTarBz2(archive: InputStream, destination: File) {
-        destination.mkdirs()
-        val canonicalDestination = destination.canonicalFile
-        TarArchiveInputStream(
-            BZip2CompressorInputStream(BufferedInputStream(archive), true),
-        ).use { tar ->
-            while (true) {
-                val entry = tar.nextEntry ?: break
-                val target = File(destination, entry.name).canonicalFile
-                // Reject paths that escape the destination: the archive is
-                // fetched over the network and is not ours to trust.
-                if (!target.path.startsWith(canonicalDestination.path + File.separator)) {
-                    Log.w(TAG, "Skipping archive entry outside destination: ${entry.name}")
-                    continue
-                }
-                if (entry.isDirectory) {
-                    target.mkdirs()
-                    continue
-                }
-                target.parentFile?.mkdirs()
-                target.outputStream().use { tar.copyTo(it, DEFAULT_BUFFER_SIZE) }
-            }
-        }
-    }
-
     companion object {
         private const val TAG = "ModelManager"
 
         /**
-         * The int8 English bundle from sherpa-onnx. Pocket TTS itself is
-         * multilingual, but this is the only Pocket bundle sherpa-onnx
-         * currently publishes.
+         * pocket-speak's model: Kevin AHM's ONNX export of Kyutai's
+         * `english_2026-04`, pinned to a commit, with the sha256s the desk
+         * CLI's `install.rs` uses (which are speech-kit's catalog pins).
          */
-        const val MODEL_NAME = "sherpa-onnx-pocket-tts-int8-2026-01-26"
-        const val MODEL_URL =
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$MODEL_NAME.tar.bz2"
+        const val MODEL_NAME = "english_2026-04"
+
+        /** The sherpa-onnx bundle this app read from until 2026-10-03. */
+        private const val RETIRED_MODEL_NAME = "sherpa-onnx-pocket-tts-int8-2026-01-26"
+        const val BUNDLE_URL =
+            "https://huggingface.co/KevinAHM/pocket-tts-onnx/resolve/58a6d00cf13d239b6748cb0769f35c580a8f606c/onnx/english_2026-04"
+        const val EMBEDDINGS_URL =
+            "https://huggingface.co/kyutai/pocket-tts-without-voice-cloning/resolve/e041936c75475d350b405bc870bcf7c22da4e9e6/languages/english_2026-04/embeddings"
+
+        /** Per voice, so concurrent ModelManager instances share them. */
+        private val embeddingLocks = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+        private val verifiedEmbeddings: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+        val MODEL_FILES: List<Pair<String, String>> = listOf(
+            "bundle.json" to "bab643150f437f37df080a710520ff39ed9ebd9a339f8ebdc739f7eddfc28b3f",
+            "tokenizer.model" to "d461765ae179566678c93091c5fa6f2984c31bbe990bf1aa62d92c64d91bc3f6",
+            "text_conditioner.onnx" to "4ecee995fb69f85c7a7493d11f7b5ee15d9950facc7ab3f5c9c49ef1e03847bb",
+            "flow_lm_main_int8.onnx" to "f9bd8106b79a0192c1c43399ab938fb24900a95c1c599870d75a884e99000116",
+            "flow_lm_flow_int8.onnx" to "3dd781ee5abee9e195320bf0106bebd6372a852b3b36352524ee78b40554635d",
+            "mimi_decoder_int8.onnx" to "3630450a3297a101792a6ac66619ebc70ab916b265e6220c2afaef8b1673f925",
+        )
     }
 }
