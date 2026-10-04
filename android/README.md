@@ -66,6 +66,14 @@ knowing: it is the raw prompt, so it carries the recording's own room and
 pacing. The synthesised voice tracks its timbre closely, which is the thing
 being chosen, but not its background.
 
+## Installing
+
+Every build of `main` that touches the app publishes its release APK as a
+GitHub release. The newest is always at
+<https://github.com/mycosavant/pocket-tts/releases/latest/download/pocket-tts.apk>;
+open it on the phone and allow the install. Every APK is signed with the same
+committed key, so a new one installs over an old one and keeps its data.
+
 ## Building
 
 Requires JDK 17+ and the Android SDK (compileSdk 35, build-tools 35.0.0).
