@@ -2,6 +2,11 @@
 
 *End-to-end test results, 11-12 Sep 2026, build 52 verified on device.*
 
+*These results are for the sherpa-onnx engine. On 2026-10-03 the app replaced
+it with pocket-speak's Rust engine (`engine-swap.md`); the engine-level
+findings below describe the old engine, while the script and proot ones still
+apply.*
+
 Testing the Termux -> Pocket TTS read-aloud path on the device for the first
 time. Eight test cases, eleven reads. Everything that failed on first contact
 was in the shell script or the proot environment - none of it in the app. The
