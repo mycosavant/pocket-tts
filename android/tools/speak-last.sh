@@ -16,6 +16,17 @@
 # Typed at the prompt, the "last assistant record" is the reply on screen - the
 # one that just finished. That is the intent, not an off-by-one.
 #
+# Where the transcript comes from, first match wins:
+#
+#   CLAUDE_TTS_TRANSCRIPT=<file>   that file
+#   CLAUDE_TTS_REMOTE=<ssh host>   the newest transcript on that machine, copied
+#                                  over ssh: for an agent running on a desk the
+#                                  phone reaches by ssh, including one in a Warp
+#                                  panel. It uses the ssh access the phone
+#                                  already has and asks for nothing new.
+#   the hook JSON on stdin, then CLAUDE_CODE_SESSION_ID, then the newest local
+#   transcript.
+#
 # Modes, from $CLAUDE_TTS:
 #
 #   broadcast  (default) SpeakReceiver, no window, works with the screen off
@@ -76,8 +87,24 @@ if [ ! -t 0 ] && [ -p /dev/stdin ]; then
   hook_json=$(cat 2>/dev/null)
 fi
 
-transcript=""
-if [ -n "$hook_json" ]; then
+transcript=${CLAUDE_TTS_TRANSCRIPT:-}
+remote_copy=""
+if [ -z "$transcript" ] && [ -n "${CLAUDE_TTS_REMOTE:-}" ]; then
+  command -v ssh >/dev/null 2>&1 || die "speak-last: ssh is not installed (pkg install openssh)"
+  # A temp file, not a pipe into jq: the parse below reads a path, and the same
+  # proot /dev/fd trap that broke `< <(...)` would break any substitution here.
+  remote_copy=$(mktemp) || die "speak-last: could not create a temp file"
+  trap 'rm -f "$remote_copy"' EXIT
+  # The newest transcript on the far side, found there. Only the tail is sent:
+  # the last reply is at the end, and a long session file is megabytes over a
+  # phone connection. 2000 lines holds the last turn of any session measured.
+  err=$(ssh -o BatchMode=yes "$CLAUDE_TTS_REMOTE" \
+          'f=$(find "$HOME/.claude/projects" -type f -name "*.jsonl" -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d" " -f2-); [ -n "$f" ] || { echo "no transcript under ~/.claude/projects" >&2; exit 3; }; tail -n 2000 "$f"' \
+          2>&1 >"$remote_copy") \
+    || die "speak-last: could not fetch a transcript from $CLAUDE_TTS_REMOTE${err:+ - }${err}"
+  transcript=$remote_copy
+fi
+if [ -z "$transcript" ] && [ -n "$hook_json" ]; then
   transcript=$(printf '%s' "$hook_json" | jq -r '.transcript_path // empty' 2>/dev/null)
 fi
 if [ -z "$transcript" ] && [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
@@ -166,7 +193,7 @@ case "$mode" in
     # shell's fd 63 is not there to open. The loop body then never runs at all,
     # and the only sign of it is a "(0 broadcast(s))" in the success message.
     queue=$(mktemp) || die "speak-last: could not create a temp file"
-    trap 'rm -f "$queue"' EXIT
+    trap 'rm -f "$queue" ${remote_copy:+"$remote_copy"}' EXIT
     printf '%s' "$text" | split > "$queue"
 
     # `am` exits 1 for a refused broadcast, but 0 for one addressed to a
