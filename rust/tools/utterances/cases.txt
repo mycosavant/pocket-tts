@@ -1,0 +1,11 @@
+# One case per line. The failure these measure is the model ending a
+# generation early; see android/docs/eleven-utterances.md, section 3.1.
+countdown-after-prose	The build finished and the log looks clean. One. Two. Three. Four. Five.
+countdown-alone	One. Two. Three. Four. Five.
+three-after-prose	The build finished and the log looks clean. One. Two. Three.
+statuses	The build finished and the log looks clean. Patching. Testing. Done.
+compiles-yes	The build finished and the log looks clean. It compiles. Yes.
+countdown-then-prose	The build finished and the log looks clean. One. Two. Three. Four. Five. And this final ordinary sentence closes the paragraph.
+single-short-end	There is plenty of audio to chew through in this sentence. Done.
+numbers-in-sentence	Tests 1, 2 and 3 are green.
+letters-in-sentence	Files A, B and C are updated.
