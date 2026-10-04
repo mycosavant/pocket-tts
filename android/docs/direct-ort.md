@@ -1,5 +1,8 @@
 # Running the model directly on onnxruntime
 
+**Built 2026-10-03 as the Rust core under the app: see `engine-swap.md`.** The
+rest of this page is the reasoning as it stood, left as written.
+
 A scope, not a plan of record. Nothing here is built. It exists so the decision
 to build it — or not to — is made against what is actually in the model bundle
 rather than against a guess.

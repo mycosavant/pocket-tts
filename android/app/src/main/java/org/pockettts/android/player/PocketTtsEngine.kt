@@ -48,7 +48,7 @@ class PocketTtsEngine(
             settings.decodeSteps,
             settings.temperature,
             settings.voiceSeed,
-            onAudio,
+            onAudio = onAudio,
         )
     }
 
@@ -82,13 +82,9 @@ class PocketTtsEngine(
                 )
             }
         }
-        // Not a stock voice, so it is one the user imported. Nothing fetches
-        // these, so the size is already true before the load.
-        val imported = manager.voiceFile(voiceId)
-        if (imported.isFile) {
-            VoiceTrace.resolved(caller, voiceId, voiceId, imported.length(), 0)
-            return tts.loadVoiceFile(voiceId, imported)
-        }
+        // Not a stock voice, so it is one the user imported. This engine
+        // cannot clone (PocketTts.loadVoiceFile), so it reads in the default
+        // voice, and the trace below says which was asked for.
         val fallback = VoiceCatalog.default()
         try {
             return tts.loadVoice(fallback)

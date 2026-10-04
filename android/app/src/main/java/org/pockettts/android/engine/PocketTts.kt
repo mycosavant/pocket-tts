@@ -2,41 +2,43 @@ package org.pockettts.android.engine
 
 import android.content.Context
 import android.util.Log
-import com.k2fsa.sherpa.onnx.GenerationConfig
-import com.k2fsa.sherpa.onnx.OfflineTts
-import com.k2fsa.sherpa.onnx.OfflineTtsConfig
-import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
-import com.k2fsa.sherpa.onnx.OfflineTtsPocketModelConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import org.pockettts.android.debug.Metrics
 import org.pockettts.android.debug.VoiceTrace
+import sonic.Sonic
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Owns the one loaded copy of the model.
  *
- * Loading takes a few seconds and a few hundred megabytes of RAM, so the engine
- * is a process-wide singleton shared by the reader UI, the scratchpad and the
- * system TTS service - all three of which can be alive at once.
+ * The engine is pocket-speak's, the Rust crate the desk CLI runs, over JNI
+ * ([NativeEngine]). It replaced sherpa-onnx on 2026-10-03, after the same
+ * text through both scored 3.5% and 53% word error on TalkBack's
+ * announcements and 1.5% and 3.4% on prose (`android/docs/engine-swap.md`).
  *
- * Synthesis is serialised: sherpa-onnx keeps mutable decoder state per engine
- * instance, so two concurrent generations would interleave into noise.
+ * Loading takes about half a second on a Galaxy S25 (0.43-0.67 s measured)
+ * and a few hundred megabytes of RAM, so the engine
+ * is a process-wide singleton shared by the reader UI, the scratchpad and the
+ * system TTS service - all three of which can be alive at once. Synthesis is
+ * serialised: the engine keeps per-generation state, so two at once would
+ * interleave into noise.
  */
 class PocketTts private constructor(
-    private val tts: OfflineTts,
+    private val engine: NativeEngine,
     private val modelManager: ModelManager,
 ) {
 
-    val sampleRate: Int get() = tts.sampleRate()
+    val sampleRate: Int = engine.sampleRate
 
     private val synthesisLock = Mutex()
 
-    /** A voice prompt, already decoded to the float samples sherpa-onnx wants. */
-    data class LoadedVoice(val id: String, val samples: FloatArray, val sampleRate: Int) {
+    /** A voice embedding, loaded into the engine once and reused. */
+    class LoadedVoice internal constructor(val id: String, internal val handle: Long) {
         override fun equals(other: Any?): Boolean =
             this === other || (other is LoadedVoice && id == other.id)
 
@@ -49,36 +51,43 @@ class PocketTts private constructor(
 
     suspend fun loadVoice(voice: VoiceCatalog.Voice): LoadedVoice = withContext(Dispatchers.IO) {
         voiceCache[voice.id]?.let { return@withContext it }
-        val file = modelManager.ensureVoice(voice)
-        loadVoiceFile(voice.id, file)
+        val file = modelManager.ensureEmbedding(voice)
+        synchronized(voiceCache) {
+            voiceCache[voice.id] ?: LoadedVoice(voice.id, engine.loadVoice(file.absolutePath))
+                .also { voiceCache[voice.id] = it }
+        }
     }
 
-    suspend fun loadVoiceFile(id: String, file: File): LoadedVoice = withContext(Dispatchers.IO) {
-        voiceCache[id]?.let { return@withContext it }
-        val audio = WavReader.read(file)
-        // Pocket TTS conditions on a short prompt; a long one costs encode time
-        // on first use and buys nothing. sherpa-onnx caps it internally too,
-        // but trimming here keeps the wav we hold in memory small.
-        val trimmed = if (audio.durationSeconds > MAX_PROMPT_SECONDS) {
-            audio.samples.copyOf((MAX_PROMPT_SECONDS * audio.sampleRate).toInt())
-        } else {
-            audio.samples
-        }
-        LoadedVoice(id, trimmed, audio.sampleRate).also { voiceCache[id] = it }
-    }
+    /**
+     * A voice cloned from the user's own recording.
+     *
+     * Not available on this engine: pocket-speak is conditioned on precomputed
+     * embeddings, and making one from a wav needs the Mimi encoder, which its
+     * bundle does not carry. Callers fall back to a stock voice. Bringing
+     * cloning back is a documented later step (`android/docs/engine-swap.md`).
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun loadVoiceFile(id: String, file: File): LoadedVoice =
+        throw UnsupportedOperationException("Cloned voices are not supported by this engine yet")
 
     /**
      * Synthesises [text] and hands audio to [onAudio] as it is produced.
      *
-     * @param numSteps Euler steps per frame when decoding the flow. See
-     *   [Settings.decodeSteps]: sherpa-onnx defaults to 5, the reference
-     *   implementation to 1.
+     * @param speed 1 is the voice's own pace. Anything else is applied after
+     *   generation by Sonic, which changes tempo and keeps pitch; the model
+     *   has no speed input of its own.
+     * @param numSteps unused: this engine decodes the flow in one step, as the
+     *   reference implementation does. Kept so the setting's callers compile.
      * @param temperature width of the neighbourhood the speaker is drawn from.
-     * @param seed fixes that draw, or -1 to take a fresh one each sentence.
-     * @param onAudio receives float samples in [-1, 1]; return false to abandon
-     *   the rest of this utterance.
+     * @param seed restarts sampling from this seed, or -1 to keep drawing.
+     * @param cancel stops this generation at the next frame once cancelled, or
+     *   at the first if it already was. Its owner makes it before calling, so
+     *   a cancel during the wait for [synthesisLock] is not lost.
+     * @param onAudio receives float samples, clamped to [-1, 1]; return false
+     *   to abandon the rest of this utterance.
      * @return false if generation was stopped early.
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun synthesize(
         text: String,
         voice: LoadedVoice,
@@ -86,52 +95,39 @@ class PocketTts private constructor(
         numSteps: Int,
         temperature: Float,
         seed: Int,
+        cancel: NativeEngine.CancelToken? = null,
         onAudio: (FloatArray) -> Boolean,
     ): Boolean = synthesisLock.withLock {
         withContext(Dispatchers.Default) {
             var completed = true
-            val config = generationConfig(
-                voice,
-                speed,
-                numSteps,
-                temperature,
-                seed,
-            )
-            // Timed from the call to the first sample out of it: the voice
-            // embedding being encoded plus the model's first pass, which is the
-            // wait before a chunk starts and the only interval that moves when
-            // the conditioning does. sherpa-onnx caches the embedding against a
-            // hash of the reference samples, so a prompt that never changes is
-            // encoded once per process and one that moves is a miss every time -
-            // which is what made this figure worth having.
+            val stretch = Stretch.forSpeed(speed, sampleRate)
             val startedAt = System.currentTimeMillis()
             var firstSampleMillis = -1L
+            val emit: (FloatArray) -> Boolean = { samples ->
+                if (samples.isEmpty() || onAudio(samples)) true else {
+                    completed = false
+                    false
+                }
+            }
             try {
-                tts.generateWithConfigAndCallback(
-                    text,
-                    config,
-                    audioCallback { samples ->
-                        if (firstSampleMillis < 0) {
-                            firstSampleMillis = System.currentTimeMillis() - startedAt
-                        }
-                        if (onAudio(samples)) true else {
-                            completed = false
-                            false
-                        }
-                    },
-                )
+                val stats = engine.synthesize(voice.handle, text, temperature, seed.toLong(), cancel) { samples ->
+                    if (firstSampleMillis < 0) firstSampleMillis = System.currentTimeMillis() - startedAt
+                    // The decoder can overshoot full scale. Sonic narrows
+                    // floats to 16-bit without a clamp, so an overshoot would
+                    // wrap into a full-scale click; clamped here for both paths.
+                    for (i in samples.indices) samples[i] = samples[i].coerceIn(-1f, 1f)
+                    emit(stretch?.process(samples) ?: samples)
+                }
+                val end = runCatching { JSONObject(stats).optString("end") }.getOrNull()
+                if (end == "Cancelled") completed = false
+                // Sonic's tail only for a chunk that finished.
+                if (completed && stretch != null) emit(stretch.drain())
             } finally {
-                // Recorded here rather than at the call site because this is
-                // the last place the prompt is a real array of samples:
-                // everything upstream is an id, and an id is exactly what has
-                // been lying. After the generation rather than before it, so
-                // the line can carry what it cost; a finally so a generation
-                // that throws still leaves its breadcrumb.
                 VoiceTrace.generated(
                     voiceId = voice.id,
-                    promptSamples = voice.samples.size,
-                    promptRate = voice.sampleRate,
-                    promptHash = voice.samples.contentHashCode(),
+                    promptSamples = 0,
+                    promptRate = sampleRate,
+                    promptHash = voice.handle.hashCode(),
                     temperature = temperature,
                     seed = seed,
                     firstSampleMillis = firstSampleMillis,
@@ -141,105 +137,36 @@ class PocketTts private constructor(
         }
     }
 
-    fun release() {
-        voiceCache.clear()
-        tts.release()
+    /** Sonic, set to one speed for one chunk. Null at speed 1. */
+    internal class Stretch private constructor(private val sonic: Sonic) {
+        fun process(samples: FloatArray): FloatArray {
+            sonic.writeFloatToStream(samples, samples.size)
+            return read()
+        }
+
+        fun drain(): FloatArray {
+            sonic.flushStream()
+            return read()
+        }
+
+        private fun read(): FloatArray {
+            val out = FloatArray(sonic.samplesAvailable())
+            val n = if (out.isEmpty()) 0 else sonic.readFloatFromStream(out, out.size)
+            return if (n == out.size) out else out.copyOf(n)
+        }
+
+        companion object {
+            fun forSpeed(speed: Float, sampleRate: Int): Stretch? =
+                if (kotlin.math.abs(speed - 1f) < 0.01f) {
+                    null
+                } else {
+                    Stretch(Sonic(sampleRate, 1).apply { this.speed = speed })
+                }
+        }
     }
 
     companion object {
         private const val TAG = "PocketTts"
-
-        /**
-         * A sentence length no chunk can exceed, so none is ever re-split.
-         *
-         * `TextChunker` caps a chunk at 400 characters. This is comfortably
-         * above that and comfortably below the point where the generation's own
-         * `max_frames` cap (500 frames, about 40 seconds at the model's frame
-         * rate) could truncate a chunk: 400 characters is roughly 28 seconds of
-         * speech, so a whole chunk fits inside one generation with room to
-         * spare.
-         */
-        private const val WHOLE_CHUNK = 2000
-        private const val MAX_PROMPT_SECONDS = 10f
-
-        /**
-         * Wraps the audio callback in a real class rather than a lambda.
-         *
-         * sherpa-onnx's JNI resolves this callback by name and exact signature -
-         * `invoke([F)Ljava/lang/Integer;`. Kotlin 2.0 compiles lambdas with
-         * `invokedynamic` by default, and D8 desugars those into
-         * `$$ExternalSyntheticLambda` classes carrying only the erased
-         * `invoke(Object)Object`. The specialised method the JNI looks for is
-         * simply absent, so `GetMethodID` fails, and because the JNI call
-         * proceeds with a pending exception the runtime aborts the process -
-         * a native crash with no Java stack trace, from ordinary Kotlin.
-         *
-         * An object expression generates an ordinary class with both the
-         * specialised method and its bridge, which is what the lookup needs.
-         * `PocketTtsCallbackTest` asserts that signature exists.
-         *
-         * @param onAudio returns true to keep generating, false to stop.
-         */
-        /**
-         * The configuration for one generation, as a value a test can read.
-         *
-         * Extracted because the two settings that decide *who* is speaking
-         * travel in the untyped `extra` map, where a typo is not a compile
-         * error and the consequence is silently getting sherpa-onnx's defaults
-         * back - which is exactly the state this app shipped in.
-         *
-         * The keys are read in `offline-tts-pocket-impl.h`:
-         *
-         *   float temperature = gen_config.GetExtraFloat("temperature", 0.7f);
-         *   float stddev = std::sqrt(temperature);
-         *   int32_t seed = gen_config.GetExtraInt("seed", -1);
-         *   NormalDataGenerator normal_gen(0, stddev, seed);
-         *
-         * inside GenerateSingleSentence - per sentence, not per call, which is
-         * why pinning the seed is what steadies a voice across a paragraph.
-         */
-        fun generationConfig(
-            voice: LoadedVoice,
-            speed: Float,
-            numSteps: Int,
-            temperature: Float,
-            seed: Int,
-        ): GenerationConfig = GenerationConfig(
-            speed = speed,
-            referenceAudio = voice.samples,
-            referenceSampleRate = voice.sampleRate,
-            numSteps = numSteps,
-            extra = mapOf(
-                "temperature" to temperature.toString(),
-                "seed" to seed.toString(),
-                // Stop sherpa-onnx splitting text this app has already split.
-                //
-                // It cuts on .!? and generates each sentence as an independent
-                // pass, and that is where the seams come from: a paragraph is a
-                // succession of separate generations, each with its own onset
-                // and its own ending, none of them knowing what came before.
-                // The reference implementation of this model does not do that -
-                // it runs one autoregressive pass over the whole text and stops
-                // on EOS - and the difference is audible as sentences that run
-                // into each other and first syllables that sound clipped.
-                //
-                // TextChunker has already cut this text at sentence boundaries,
-                // to a size chosen for time-to-first-audio. Re-splitting it is
-                // redundant work that reopens seams this app has already closed,
-                // so these two ask for a chunk to be left whole: above MAX, so
-                // SplitLongSentence never fires, and above it again for the
-                // merge, so every sentence in the chunk is accumulated back
-                // into one.
-                "max_char_in_sentence" to WHOLE_CHUNK.toString(),
-                "min_char_in_sentence" to WHOLE_CHUNK.toString(),
-            ),
-        )
-
-        fun audioCallback(onAudio: (FloatArray) -> Boolean): Function1<FloatArray, Int> =
-            object : Function1<FloatArray, Int> {
-                // sherpa-onnx reads the result as "1 to keep going, 0 to stop".
-                override fun invoke(samples: FloatArray): Int = if (onAudio(samples)) 1 else 0
-            }
 
         @Volatile
         private var instance: PocketTts? = null
@@ -274,30 +201,14 @@ class PocketTts private constructor(
             val files = ModelInstall.ensure(context)
             val settings = Settings(context)
 
-            Log.i(TAG, "Loading Pocket TTS from ${files.lmMain.parentFile}")
-            val config = OfflineTtsConfig(
-                model = OfflineTtsModelConfig(
-                    pocket = OfflineTtsPocketModelConfig(
-                        lmFlow = files.lmFlow.absolutePath,
-                        lmMain = files.lmMain.absolutePath,
-                        encoder = files.encoder.absolutePath,
-                        decoder = files.decoder.absolutePath,
-                        textConditioner = files.textConditioner.absolutePath,
-                        vocabJson = files.vocabJson.absolutePath,
-                        tokenScoresJson = files.tokenScoresJson.absolutePath,
-                    ),
-                    numThreads = settings.numThreads,
-                    debug = false,
-                    provider = "cpu",
-                ),
-            )
+            Log.i(TAG, "Loading pocket-speak's engine from ${files.dir}")
             // Timed because the process is killed while cached routinely, and
-            // this is paid again on the next read. Whether that is worth
-            // holding the model in memory depends on the number.
+            // this is paid again on the next read.
             val startedAt = System.currentTimeMillis()
-            val tts = OfflineTts(assetManager = null, config = config)
+            val engine = NativeEngine.load(files.dir.absolutePath, settings.numThreads)
             Metrics.modelLoadMillis = System.currentTimeMillis() - startedAt
-            PocketTts(tts, manager)
+            manager.removeRetiredModel()
+            PocketTts(engine, manager)
         }
     }
 }

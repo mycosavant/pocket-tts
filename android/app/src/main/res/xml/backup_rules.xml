@@ -10,4 +10,5 @@
         failed one, taking the settings and the voices down with it.
     -->
     <exclude domain="file" path="pocket-tts/sherpa-onnx-pocket-tts-int8-2026-01-26" />
+    <exclude domain="file" path="pocket-tts/english_2026-04" />
 </full-backup-content>

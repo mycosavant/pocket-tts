@@ -1,0 +1,32 @@
+In-app runs on the Galaxy S25 (SM-S938U1, Android 16), 2026-10-03. Copied from the session's adb output.
+
+== Debug build, first read after install (15:52), SpeakReceiver broadcast of an 86-character text
+logcat:
+15:52:22.743 I/SpeakReceiver( 4988): Utterance 1: 86 characters
+15:52:22.750 I/PocketTts( 4988): Loading pocket-speak's engine from /data/user/0/org.pockettts.android/files/pocket-tts/english_2026-04
+15:52:23.399 I/ModelManager( 4988): Removed the retired model at /data/user/0/org.pockettts.android/files/pocket-tts/sherpa-onnx-pocket-tts-int8-2026-01-26
+15:52:24.113 W/AudioTrack( 4988): restartIfDisabled(407): releaseBuffer() track 0xb400007aebf19d70 disabled due to previous underrun, restarting
+Timings screen (uiautomator dump):
+utterances read: 1
+model load: 620 ms
+time to first audio: 1104 ms
+generation speed: 3.46x real time
+audio underruns: 0
+[agent] asked for alba, got alba (958542 bytes as expected)
+[chunk 0] alba prompt=0.00s hash=eff12439 temp=0.30 seed=1 first=366ms
+
+== Release build (minified), after the review fixes (16:29), a 76-character text
+logcat:
+16:29:53.918 I/SpeakReceiver(14802): Utterance 1: 76 characters
+16:29:55.229 W/AudioTrack(14802): restartIfDisabled(575): releaseBuffer() track 0xb400007aebf19d70 disabled due to previous underrun, restarting
+(no FATAL, UnsatisfiedLinkError, NoSuchMethodError or "audio sink" line)
+Timings screen:
+utterances read: 1
+model load: 628 ms
+time to first audio: 1059 ms
+generation speed: 3.52x real time
+audio underruns: 0
+[chunk 0] alba prompt=0.00s hash=eff116e9 temp=0.30 seed=1 first=353ms
+
+The Timings "audio underruns" is AudioTrack.getUnderrunCount() as Reader records it; the framework's
+restart-after-underrun line appeared in both runs anyway. Why the two disagree is not established.

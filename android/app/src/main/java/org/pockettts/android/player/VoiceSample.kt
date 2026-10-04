@@ -34,7 +34,7 @@ import kotlin.math.min
  * That is not a shortcut: in Pocket TTS a voice *is* a few seconds of reference
  * audio the model conditions on, so this is the most direct answer to "what does
  * this one sound like". It also means a sample costs nothing but the prompt
- * download - no 98 MB model bundle, no inference, no waiting - and works on a
+ * download - no 125 MB model bundle, no inference, no waiting - and works on a
  * fresh install before the model has ever been fetched. The download it does is
  * the same one selecting the voice would trigger later, so browsing by ear warms
  * the cache instead of duplicating work.

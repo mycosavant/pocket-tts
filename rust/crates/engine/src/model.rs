@@ -36,7 +36,7 @@ const GENERATION_PADDING_SECONDS: f32 = 2.0;
 const EOS_THRESHOLD: f32 = -4.0;
 /// `english_2026-04`'s `default_temperature`; noise std is its square root, as
 /// in `flow_lm.py`.
-const TEMPERATURE: f32 = 0.3;
+const DEFAULT_TEMPERATURE: f32 = 0.3;
 
 #[derive(Debug)]
 pub struct Error(String);
@@ -164,6 +164,7 @@ pub struct Engine {
     flow: Session,
     decoder: Session,
     random: XorShift64,
+    temperature: f32,
 }
 
 impl Engine {
@@ -222,11 +223,18 @@ impl Engine {
             flow,
             decoder,
             random: XorShift64::seeded(),
+            temperature: DEFAULT_TEMPERATURE,
         })
     }
 
     pub fn sample_rate(&self) -> u32 {
         self.config.sample_rate
+    }
+
+    /// Sets the width of the neighbourhood each frame's noise is drawn from:
+    /// its standard deviation is the square root of this. 0.3 unless set.
+    pub fn set_temperature(&mut self, temperature: f32) {
+        self.temperature = temperature.max(0.0);
     }
 
     /// Makes sampling reproducible from here on.
@@ -285,6 +293,13 @@ impl Engine {
 
     /// Synthesises one chunk, handing samples to `sink` as they are decoded.
     /// `sink` returning `false` stops generation.
+    ///
+    /// Keeps no per-chunk state on `self`: the flow and decoder states are
+    /// built fresh from `voice` and the manifest on each call. So a call that
+    /// errs or panics leaves the engine as it found it, except that the
+    /// random generator has advanced. The Android JNI crate relies on this to
+    /// keep reading after a panic; caching state across chunks here would
+    /// break that.
     pub fn synthesize(
         &mut self,
         text: &str,
@@ -337,7 +352,7 @@ impl Engine {
         let max_frames = (((token_count as f32 / TOKENS_PER_SECOND) + GENERATION_PADDING_SECONDS)
             * self.config.frame_rate)
             .ceil() as usize;
-        let noise_std = TEMPERATURE.sqrt();
+        let noise_std = self.temperature.sqrt();
         let mut current = vec![f32::NAN; latent_dim];
         let mut pending = Vec::with_capacity(LATENT_DECODE_CHUNK * latent_dim);
         let mut stats = ChunkStats {
