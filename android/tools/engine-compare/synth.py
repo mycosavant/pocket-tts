@@ -2,27 +2,48 @@
 
 usage: synth.py OUTDIR --mode whole|sherpa|<fix> --speed 1.0 --steps 1 [--threads 2]
 """
-import argparse, json, pathlib, re, time, hashlib
-import numpy as np, soundfile as sf, sherpa_onnx as so
-from chunker import chunk
-from corpus import TALKBACK, READALOUD
 
+import argparse
+import hashlib
+import json
 import os
+import pathlib
+import re
+
+import numpy as np
+import sherpa_onnx as so
+import soundfile as sf
+from chunker import chunk
+from corpus import READALOUD, TALKBACK
+
 M = pathlib.Path(__file__).parent / "model"
 FP32 = os.environ.get("MODEL") == "fp32"
-W = pathlib.Path(__file__).parent / "model_fp32" / "sherpa-onnx-pocket-tts-2026-01-26" if FP32 else M
+W = (
+    pathlib.Path(__file__).parent / "model_fp32" / "sherpa-onnx-pocket-tts-2026-01-26"
+    if FP32
+    else M
+)
 Q = "" if FP32 else ".int8"
 SR = 24000
 
 
 def load_tts(threads):
-    cfg = so.OfflineTtsConfig(model=so.OfflineTtsModelConfig(
-        pocket=so.OfflineTtsPocketModelConfig(
-            lm_flow=str(W / f"lm_flow{Q}.onnx"), lm_main=str(W / f"lm_main{Q}.onnx"),
-            encoder=str(M / "encoder.onnx"), decoder=str(W / f"decoder{Q}.onnx"),
-            text_conditioner=str(M / "text_conditioner.onnx"),
-            vocab_json=str(M / "vocab.json"), token_scores_json=str(M / "token_scores.json")),
-        num_threads=threads, debug=False, provider="cpu"))
+    cfg = so.OfflineTtsConfig(
+        model=so.OfflineTtsModelConfig(
+            pocket=so.OfflineTtsPocketModelConfig(
+                lm_flow=str(W / f"lm_flow{Q}.onnx"),
+                lm_main=str(W / f"lm_main{Q}.onnx"),
+                encoder=str(M / "encoder.onnx"),
+                decoder=str(W / f"decoder{Q}.onnx"),
+                text_conditioner=str(M / "text_conditioner.onnx"),
+                vocab_json=str(M / "vocab.json"),
+                token_scores_json=str(M / "token_scores.json"),
+            ),
+            num_threads=threads,
+            debug=False,
+            provider="cpu",
+        )
+    )
     return so.OfflineTts(cfg)
 
 
@@ -45,6 +66,7 @@ def gen(tts, text, voice, vsr, speed, steps, whole, temperature=0.3, seed=1, ext
     def cb(samples, progress):
         got.append(np.array(samples, dtype=np.float32))
         return 1
+
     tts.generate(text, g, cb)
     return np.concatenate(got) if got else np.zeros(0, np.float32)
 
@@ -80,9 +102,9 @@ def pieces_for(mode, text):
         return [(text, 0.0, True)]
     if base == "sherpa":
         return [(text, 0.0, False)]
-    if base == "ref":            # reference text prep, one whole-chunk pass
+    if base == "ref":  # reference text prep, one whole-chunk pass
         return [(prepare(text), 0.0, True)]
-    if base == "refsherpa":      # reference text prep, sherpa's own split
+    if base == "refsherpa":  # reference text prep, sherpa's own split
         return [(prepare(text), 0.0, False)]
     if base == "refpad":
         # the whole of prepare_text_prompt: padding written as U+2581, the tokenizer's own
@@ -92,11 +114,11 @@ def pieces_for(mode, text):
         if n < 5:
             t = "\u2581" * 8 + t
         return [(t, 0.0, True, {"frames_after_eos": "5" if n <= 4 else "3"})]
-    if base == "lines":          # each line a sentence, one whole-chunk pass
+    if base == "lines":  # each line a sentence, one whole-chunk pass
         return [(lines_as_sentences(text), 0.0, True)]
-    if base == "linessherpa":    # each line a sentence, sherpa's own split (merges to >=30 chars)
+    if base == "linessherpa":  # each line a sentence, sherpa's own split (merges to >=30 chars)
         return [(lines_as_sentences(text), 0.0, False)]
-    if base == "perunit":        # each line / sentence its own generation, same seed; @pause
+    if base == "perunit":  # each line / sentence its own generation, same seed; @pause
         pause = float(arg) if arg else 0.0
         units = [u for u in SENT.split(lines_as_sentences(text)) if u.strip()]
         return [(u, pause if i < len(units) - 1 else 0.0, True) for i, u in enumerate(units)]
@@ -128,20 +150,43 @@ def main():
             for piece in pieces_for(a.mode, src):
                 ptext, ppause, whole = piece[:3]
                 more = piece[3] if len(piece) > 3 else None
-                s = gen(tts, ptext, voice, vsr, a.speed, a.steps, whole, seed=a.seed, extra_more=more)
+                s = gen(
+                    tts, ptext, voice, vsr, a.speed, a.steps, whole, seed=a.seed, extra_more=more
+                )
                 caudio.append(s)
                 if ppause > 0:
                     caudio.append(np.zeros(int(ppause * SR), np.float32))
             c = np.concatenate(caudio)
             sf.write(out / f"{name}.c{ci:02d}.wav", c, SR)
-            meta.append({"item": name, "chunk": ci, "text": src, "sent": [p[0] for p in pieces_for(a.mode, src)], "pause": pause,
-                         "dur": round(len(c) / SR, 3), "sha": hashlib.sha1(c.tobytes()).hexdigest()[:12]})
+            meta.append(
+                {
+                    "item": name,
+                    "chunk": ci,
+                    "text": src,
+                    "sent": [p[0] for p in pieces_for(a.mode, src)],
+                    "pause": pause,
+                    "dur": round(len(c) / SR, 3),
+                    "sha": hashlib.sha1(c.tobytes()).hexdigest()[:12],
+                }
+            )
             whole_audio.append(c)
             if pause > 0:
                 whole_audio.append(np.zeros(int(pause * SR), np.float32))
         sf.write(out / f"{name}.wav", np.concatenate(whole_audio), SR)
-    (out / "meta.json").write_text(json.dumps({"mode": a.mode, "speed": a.speed, "steps": a.steps, "seed": a.seed,
-                                               "threads": a.threads, "fp32": FP32, "chunks": meta}, indent=1))
+    (out / "meta.json").write_text(
+        json.dumps(
+            {
+                "mode": a.mode,
+                "speed": a.speed,
+                "steps": a.steps,
+                "seed": a.seed,
+                "threads": a.threads,
+                "fp32": FP32,
+                "chunks": meta,
+            },
+            indent=1,
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 """Port of android/.../speech/TextChunker.kt (pocket-tts 6d69366), for this measurement only."""
+
 import re
 
 TARGET = 200
@@ -19,7 +20,10 @@ def word_count(s):
 
 def join_short_tail(text):
     starts = [0] + [m.end() for m in SENTENCE_END.finditer(text)]
-    sentences = [text[f:(starts[i + 1] if i + 1 < len(starts) else len(text))] for i, f in enumerate(starts)]
+    sentences = [
+        text[f : (starts[i + 1] if i + 1 < len(starts) else len(text))]
+        for i, f in enumerate(starts)
+    ]
     sentences = [s for s in sentences if s.strip()]
     head = len(sentences)
     while head > 0 and word_count(sentences[head - 1]) <= SHORT_SENTENCE_WORDS:
@@ -33,7 +37,7 @@ def join_short_tail(text):
             out += s
         else:
             body = s.rstrip()
-            out += TERMINAL_PUNCTUATION.sub(",", body) + s[len(body):]
+            out += TERMINAL_PUNCTUATION.sub(",", body) + s[len(body) :]
     return out
 
 
@@ -51,12 +55,14 @@ def _split_paragraph(p, target, mx):
         if len(p) - cursor <= mx:
             pieces.append((p[cursor:].strip(), cursor))
             break
-        window = p[cursor:cursor + mx]
-        cut = (_last_boundary(window, SENTENCE_END, target)
-               or _last_boundary(window, CLAUSE_END, target)
-               or (window.rfind(" ") if window.rfind(" ") > 0 else None)
-               or mx)
-        t = p[cursor:cursor + cut].strip()
+        window = p[cursor : cursor + mx]
+        cut = (
+            _last_boundary(window, SENTENCE_END, target)
+            or _last_boundary(window, CLAUSE_END, target)
+            or (window.rfind(" ") if window.rfind(" ") > 0 else None)
+            or mx
+        )
+        t = p[cursor : cursor + cut].strip()
         if t:
             pieces.append((t, cursor))
         cursor += cut

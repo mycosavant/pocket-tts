@@ -1,12 +1,20 @@
 """Same chunks through the reference PyTorch pocket-tts (PyPI 3.3.0), as a pacing/accuracy baseline.
 usage: ref_synth.py OUTDIR SEED"""
-import json, pathlib, sys
-import numpy as np, soundfile as sf, torch
-from pocket_tts import TTSModel
-from chunker import chunk
-from corpus import TALKBACK, READALOUD
 
-out = pathlib.Path(sys.argv[1]); out.mkdir(parents=True, exist_ok=True)
+import json
+import pathlib
+import sys
+
+import numpy as np
+import soundfile as sf
+import torch
+from chunker import chunk
+from corpus import READALOUD, TALKBACK
+
+from pocket_tts import TTSModel
+
+out = pathlib.Path(sys.argv[1])
+out.mkdir(parents=True, exist_ok=True)
 seed = int(sys.argv[2])
 torch.set_num_threads(2)
 model = TTSModel.load_model(language="english", temp=0.3, sampler_decode_steps=1)
@@ -20,5 +28,9 @@ for name, text, field in jobs:
         torch.manual_seed(seed)
         a = model.generate_audio(state, src).numpy().astype(np.float32)
         sf.write(out / f"{name}.c{ci:02d}.wav", a, SR)
-        meta.append({"item": name, "chunk": ci, "text": src, "pause": pause, "dur": round(len(a) / SR, 3)})
-(out / "meta.json").write_text(json.dumps({"mode": "reference-pytorch", "seed": seed, "chunks": meta}, indent=1))
+        meta.append(
+            {"item": name, "chunk": ci, "text": src, "pause": pause, "dur": round(len(a) / SR, 3)}
+        )
+(out / "meta.json").write_text(
+    json.dumps({"mode": "reference-pytorch", "seed": seed, "chunks": meta}, indent=1)
+)
