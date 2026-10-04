@@ -741,6 +741,10 @@ descriptor. Both APKs are built and checked in CI, and both are uploaded, so
 the shrunk build is something that gets installed rather than something that is
 assumed to work. The source is not the artefact, and only the artefact knows.
 
+Since the engine swap the callback is `NativeEngine.Sink.onAudio([F)Z`, and the
+engine also needs `NativeEngine`'s native methods under their own names.
+`check-jni-callback.sh` now looks for those instead of sherpa-onnx's `invoke`.
+
 ## Glass, and where it cannot exist
 
 Blurring depends entirely on what is behind the panel, and the two cases have

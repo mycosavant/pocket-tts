@@ -76,7 +76,7 @@ jobs:
       working-directory: android
       run: ./gradlew --no-daemon :app:assembleRelease
 
-    - name: Check the JNI audio callback survived shrinking
+    - name: Check the JNI methods the engine calls survived shrinking
       working-directory: android
       run: |
         ./tools/check-jni-callback.sh app/build/outputs/apk/debug/app-debug.apk
