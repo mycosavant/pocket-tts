@@ -40,6 +40,9 @@ class AudioFocus(private val context: Context) {
      */
     private var pausedForLoss = false
 
+    /** [Reader.pauseChanges] just after that pause; any change since was the listener's. */
+    private var pauseMark = 0
+
     /**
      * Whether focus was lost for good rather than for a moment.
      *
@@ -60,14 +63,15 @@ class AudioFocus(private val context: Context) {
             -> {
                 val playing = (Reader.state.value as? Reader.State.Speaking)?.paused == false
                 if (playing) {
-                    pausedForLoss = true
                     Reader.pause()
+                    pausedForLoss = true
+                    pauseMark = Reader.pauseChanges
                 }
             }
 
-            AudioManager.AUDIOFOCUS_GAIN -> if (pausedForLoss) {
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (pausedForLoss && Reader.pauseChanges == pauseMark) Reader.resume()
                 pausedForLoss = false
-                Reader.resume()
             }
         }
     }

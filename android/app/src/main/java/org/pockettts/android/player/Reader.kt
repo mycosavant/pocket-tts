@@ -798,12 +798,22 @@ object Reader {
     @VisibleForTesting
     internal const val LOOKAHEAD_CHUNKS = 1
 
+    /**
+     * Counts pauses and resumes, so [AudioFocus] can tell whether the pause it
+     * caused is still the one in effect when focus comes back.
+     */
+    @Volatile
+    var pauseChanges: Int = 0
+        private set
+
     fun pause() {
+        pauseChanges++
         player?.pause()
         (_state.value as? State.Speaking)?.let { _state.value = it.copy(paused = true) }
     }
 
     fun resume() {
+        pauseChanges++
         player?.resume()
         (_state.value as? State.Speaking)?.let { _state.value = it.copy(paused = false) }
     }

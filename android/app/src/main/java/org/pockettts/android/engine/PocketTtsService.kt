@@ -10,7 +10,6 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.job
@@ -44,17 +43,17 @@ class PocketTtsService : TextToSpeechService() {
 
     private val catalog: ModelCatalog get() = ModelCatalog.get(this)
 
-    /** Loads ahead of requests; see [warmUp]. Cancelled with the service. */
+    /**
+     * Loads ahead of requests; see [warmUp]. Not cancelled with the service: a
+     * load cut short between the native load and its hand-over would drop an
+     * engine without freeing it, and a finished one is the process's engine,
+     * which the next request wants anyway.
+     */
     private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
         warmUp(Settings(this).readingLanguage)
-    }
-
-    override fun onDestroy() {
-        background.cancel()
-        super.onDestroy()
     }
 
     /**
