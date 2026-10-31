@@ -122,6 +122,9 @@ class MainActivity : AppCompatActivity() {
         binding.steadyVoiceSwitch.setOnCheckedChangeListener { _, checked ->
             settings.steadyVoice = checked
         }
+        binding.continueChunksSwitch.setOnCheckedChangeListener { _, checked ->
+            settings.continueChunks = checked
+        }
 
         requestNotificationPermission()
     }
@@ -222,6 +225,7 @@ class MainActivity : AppCompatActivity() {
         binding.markdownSwitch.isChecked = settings.treatSelectionAsMarkdown
         binding.codeBlocksSwitch.isChecked = settings.speakCodeBlocks
         binding.steadyVoiceSwitch.isChecked = settings.steadyVoice
+        binding.continueChunksSwitch.isChecked = settings.continueChunks
 
         val manager = ModelManager(this)
         val installed = manager.isModelInstalled

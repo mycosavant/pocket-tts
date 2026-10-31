@@ -227,6 +227,8 @@ object Reader {
         val chunks: List<TextChunker.Chunk>,
         val engine: SpeechEngine,
         val speed: Float,
+        /** Whether its chunks continue each other; see [SpeechEngine.Read]. */
+        val continuing: Boolean,
     )
 
     @Volatile
@@ -544,9 +546,10 @@ object Reader {
                 turn = EngineTurn.take(),
                 source = source,
                 speakable = speakable,
-                chunks = TextChunker.chunk(speakable),
+                chunks = TextChunker.chunk(speakable, continuing = settings.continueChunks),
                 engine = engine,
                 speed = settings.speed,
+                continuing = settings.continueChunks,
             )
             utterance = prepared
             play(prepared, from = 0, askedAt = askedAt)
@@ -600,6 +603,10 @@ object Reader {
             return
         }
         var localPlayer: AudioSink? = null
+        // From here on, so a skip, which plays from another chunk, starts its
+        // own: the chunk it lands on does not follow the last one composed.
+        // Closed in the finally, after the producer below has finished.
+        val read = if (current.continuing) current.engine.startRead() else SpeechEngine.Fresh
         try {
             localPlayer = sinks.create(current.engine.sampleRate).also {
                 player = it
@@ -641,7 +648,7 @@ object Reader {
                             val chunk = current.chunks[index]
                             val startedAt = System.currentTimeMillis()
                             var samplesProduced = 0L
-                            val spoke = current.engine.synthesize(chunk.speech, current.speed) { samples ->
+                            val spoke = current.engine.synthesize(chunk.speech, current.speed, read) { samples ->
                                 // The engine only looks at this between pieces,
                                 // so a stop is felt within one piece rather than
                                 // at the end of the chunk.
@@ -745,6 +752,7 @@ object Reader {
             Log.e(TAG, "Reading failed", error)
             _state.value = State.Failed(current.id, current.source, error.message ?: error.javaClass.simpleName)
         } finally {
+            read.close()
             localPlayer?.let { Metrics.underruns = it.underruns }
             localPlayer?.release()
             if (player === localPlayer) player = null

@@ -30,6 +30,8 @@
     <string name="speak_code_blocks_explained">Fenced blocks only. Code inside a sentence, such as a file path or a flag, is always read, as words.</string>
     <string name="treat_as_markdown">Strip Markdown from selected text</string>
     <string name="steady_voice">Keep one voice across sentences</string>
+    <string name="continue_chunks">Read each passage as one</string>
+    <string name="continue_chunks_explained">Each part of a long text carries on from the part before it, so the pace and pitch do not reset between them. Turn this off if reading falls behind on a slow phone.</string>
     <string name="steady_voice_explained">Every sentence draws the same speaker from the voice sample, instead of a new one each time. Turn this off to hear a passage read differently on each attempt.</string>
 
     <string name="scratchpad_hint">Type or paste Markdown here…</string>

@@ -244,6 +244,23 @@ class ReaderTest {
     }
 
     @Test
+    fun `a read's chunks share one continuation, and a skip starts another`() = runBlocking {
+        val id = readToEnd("One first thing.\n\nTwo second thing.\n\nThree third thing.")
+        assertEquals(3, engine.spoken.size)
+        assertEquals(1, engine.reads.size)
+        assertTrue(engine.readOf.all { it === engine.reads[0] })
+        assertTrue("the read was left open", engine.reads[0].closed)
+
+        // The chunk a skip lands on does not follow the last one composed.
+        Reader.skipBack()
+        awaitUntil("the skipped sentence was re-read") { engine.spoken.size > 3 }
+        awaitFor(id, "finished after skip") { it is Reader.State.Finished }
+        assertEquals(2, engine.reads.size)
+        assertTrue(engine.readOf.last() === engine.reads[1])
+        assertTrue(engine.reads[1].closed)
+    }
+
+    @Test
     fun `skipping does not reload the engine or the voice`() = runBlocking {
         // This is the whole point of retaining the utterance: skipping back a
         // sentence should cost that sentence, not a model load.

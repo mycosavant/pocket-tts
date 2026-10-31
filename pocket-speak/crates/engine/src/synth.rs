@@ -17,11 +17,14 @@
 //! * each chunk reports how it ended, because "the model said it was done" and
 //!   "the frame budget ran out" sound alike and mean different things;
 //! * one decoder call takes at most [`MAX_DECODE_FRAMES`] latents, not every
-//!   latent queued.
+//!   latent queued;
+//! * upstream's `teacher_force_previous_chunk` (Python only there) is a
+//!   [`Continuation`] the caller keeps across its chunks, since the caller is
+//!   the one splitting the text.
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -53,6 +56,11 @@ const MIN_FRAMES_BEFORE_EOS: usize = 6;
 /// run ahead meanwhile, and the next call then decoded seconds of audio while
 /// the speaker ran dry. Four frames are 320 ms of audio.
 const MAX_DECODE_FRAMES: usize = 4;
+/// A continuation's decoder first runs over the last this many forced frames
+/// (about 1 s), audio dropped, so its audio follows on from the previous
+/// chunk's instead of starting from a fresh decoder state. Upstream's
+/// `_DECODER_WARMUP_FRAMES`.
+const DECODER_WARMUP_FRAMES: usize = 12;
 
 #[derive(Debug)]
 pub struct Error(String);
@@ -124,12 +132,64 @@ pub struct ChunkStats {
     pub samples: usize,
     pub generation_ms: u128,
     pub first_audio_ms: Option<u128>,
+    /// The previous chunk's frames this one was generated after; 0 for a
+    /// chunk that started afresh from the voice prompt.
+    pub forced_frames: usize,
+}
+
+/// Carries one read from chunk to chunk, for [`Engine::synthesize_continuing`].
+///
+/// Without it every chunk starts afresh from the voice prompt, and each one is
+/// read as if it were the first thing said: its pitch and pace reset at every
+/// junction. With it, a chunk is generated from the voice prompt, the previous
+/// chunk's text and this one's, with the previous chunk's latents
+/// teacher-forced as the first frames, so it carries on from where that one
+/// left off. This is upstream's `teacher_force_previous_chunk` (#401). Upstream
+/// measured higher naturalness on every English model (UTMOS 4.246 to 4.295 on
+/// the default one), for a prefill of 41-173 ms per chunk on a desktop and
+/// slightly lower speaker similarity by the last chunk. It pairs with chunks of
+/// about half the usual size, since two are fed at once; 50-token chunks made
+/// the 2m model skip words.
+///
+/// Make one per read and drop it, or [`Self::reset`] it, where the read jumps:
+/// a chunk continues whichever chunk last completed with it. A chunk that is
+/// cancelled or fails leaves it empty, so the next starts afresh.
+#[derive(Default)]
+pub struct Continuation {
+    previous: Option<Previous>,
+}
+
+impl Continuation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Makes the next chunk start afresh.
+    pub fn reset(&mut self) {
+        self.previous = None;
+    }
+
+    /// Whether the next chunk would continue one.
+    pub fn is_empty(&self) -> bool {
+        self.previous.is_none()
+    }
+}
+
+/// The last chunk a [`Continuation`] completed.
+struct Previous {
+    /// Which [`Voice`] it was read in; a chunk in another voice starts afresh.
+    voice: u64,
+    text: String,
+    latents: Vec<Tensor<f32, CpuDevice>>,
 }
 
 /// A voice, loaded once and reused for every chunk: the flow LM's state after
 /// the voice prompt, which every generation starts from.
 pub struct Voice {
     state: StreamingTransformerState<f32, CpuDevice>,
+    /// Unique in the process, so a [`Continuation`] knows its voice: latents
+    /// from one model would be nonsense to another.
+    id: u64,
 }
 
 impl Voice {
@@ -348,19 +408,23 @@ impl Engine {
                 current_end: used,
             }));
         }
+        static NEXT_VOICE: AtomicU64 = AtomicU64::new(0);
         Ok(Voice {
             state: StreamingTransformerState { layer_states },
+            id: NEXT_VOICE.fetch_add(1, Ordering::Relaxed),
         })
     }
 
     /// Synthesises one chunk, handing samples to `sink` as they are decoded.
-    /// `sink` returning `false` stops generation.
+    /// `sink` returning `false` stops generation. The chunk starts afresh from
+    /// `voice`; [`Self::synthesize_continuing`] carries on from the last.
     ///
     /// Keeps no per-chunk state on `self`: the flow and decoder states are built
     /// fresh from `voice` on each call. So a call that errs or panics leaves the
     /// engine as it found it, except that the random generator has advanced. The
     /// Android JNI crate relies on this to keep reading after a panic; caching
-    /// state across chunks here would break that.
+    /// state across chunks here would break that. What a read carries from one
+    /// chunk to the next lives in a [`Continuation`] the caller owns.
     pub fn synthesize(
         &mut self,
         text: &str,
@@ -368,8 +432,46 @@ impl Engine {
         cancel: &Cancel,
         sink: impl FnMut(&[f32]) -> bool,
     ) -> Result<ChunkStats> {
+        self.run(text, voice, None, cancel, sink)
+    }
+
+    /// As [`Self::synthesize`], continuing the chunk `continuation` last
+    /// completed in the same voice, if any, and recording this one for the next.
+    pub fn synthesize_continuing(
+        &mut self,
+        text: &str,
+        voice: &Voice,
+        continuation: &mut Continuation,
+        cancel: &Cancel,
+        sink: impl FnMut(&[f32]) -> bool,
+    ) -> Result<ChunkStats> {
+        self.run(text, voice, Some(continuation), cancel, sink)
+    }
+
+    fn run(
+        &mut self,
+        text: &str,
+        voice: &Voice,
+        continuation: Option<&mut Continuation>,
+        cancel: &Cancel,
+        sink: impl FnMut(&[f32]) -> bool,
+    ) -> Result<ChunkStats> {
         let started = Instant::now();
-        let (prepared, frames_after_eos_guess) = prepare_text_prompt(text, &self.text_options)
+        // Taken, so that a chunk that fails or is cancelled leaves nothing to
+        // continue from.
+        let mut continuation = continuation;
+        let previous = continuation
+            .as_deref_mut()
+            .and_then(|c| c.previous.take())
+            .filter(|previous| previous.voice == voice.id && !previous.latents.is_empty());
+        // The EOS delay depends on the new chunk only.
+        let (_, frames_after_eos_guess) = prepare_text_prompt(text, &self.text_options)
+            .map_err(|_| Error::new("nothing to say: the text is empty"))?;
+        let full_text = match &previous {
+            Some(previous) => format!("{} {text}", previous.text),
+            None => text.to_string(),
+        };
+        let (prepared, _) = prepare_text_prompt(&full_text, &self.text_options)
             .map_err(|_| Error::new("nothing to say: the text is empty"))?;
         let frames_after_eos = self
             .config
@@ -379,21 +481,35 @@ impl Engine {
         if tokens.is_empty() {
             return Err(Error::new("the text produced no tokens"));
         }
+        // With forced frames the text holds the previous chunk's too, so this
+        // is a looser bound, as upstream's is.
         let max_frames = ((tokens.len() as f32 / TOKENS_PER_SECOND_ESTIMATE + GEN_SECONDS_PADDING)
             * self.config.mimi.frame_rate as f32)
             .ceil() as usize;
         let noise = Noise::new(&mut self.random, self.temperature)?;
         let run = Run {
             tokens: &tokens,
+            forced: previous.as_ref().map_or(&[], |p| &p.latents[..]),
+            keep_latents: continuation.is_some(),
             max_frames,
             frames_after_eos,
             fade_len: self.config.mimi.sample_rate / 200,
             started,
         };
-        match &self.model {
+        let (stats, latents) = match &self.model {
             Model::Int8(model) => run.generate(model, voice, noise, cancel, sink),
             Model::Float(model) => run.generate(model, voice, noise, cancel, sink),
+        }?;
+        if let Some(continuation) = continuation
+            && stats.end != EndReason::Cancelled
+        {
+            continuation.previous = Some(Previous {
+                voice: voice.id,
+                text: text.to_string(),
+                latents,
+            });
         }
+        Ok(stats)
     }
 }
 
@@ -440,6 +556,11 @@ impl ptts::flow_lm::Rng for Noise<'_> {
 /// One chunk's generation.
 struct Run<'a> {
     tokens: &'a [u32],
+    /// The previous chunk's latents, teacher-forced before generating; empty
+    /// for a chunk that starts afresh.
+    forced: &'a [Tensor<f32, CpuDevice>],
+    /// Whether to return the latents generated, for a [`Continuation`].
+    keep_latents: bool,
     max_frames: usize,
     frames_after_eos: usize,
     fade_len: usize,
@@ -451,6 +572,8 @@ struct Generated {
     frames: usize,
     eos_frame: Option<usize>,
     end: EndReason,
+    /// Every latent sent to the decoder, when [`Run::keep_latents`].
+    latents: Vec<Tensor<f32, CpuDevice>>,
 }
 
 impl Run<'_> {
@@ -461,18 +584,17 @@ impl Run<'_> {
         mut noise: Noise<'_>,
         cancel: &Cancel,
         mut sink: impl FnMut(&[f32]) -> bool,
-    ) -> Result<ChunkStats>
+    ) -> Result<(ChunkStats, Vec<Tensor<f32, CpuDevice>>)>
     where
         Q: BackendQ<T = f32, B = CpuDevice>,
     {
-        let seq_budget = voice.len() + self.tokens.len() + self.max_frames;
+        let seq_budget = voice.len() + self.tokens.len() + self.forced.len() + self.max_frames;
         let mut state = TTSState {
             flow_lm_state: FlowLMState {
                 transformer_state: voice.state.with_seq_budget(seq_budget)?,
                 conditions: None,
             },
         };
-        model.prompt_text(&mut state, self.tokens)?;
 
         // Set once decoding ends early: the sink asked to stop, or it failed.
         let stop = AtomicBool::new(false);
@@ -515,7 +637,7 @@ impl Run<'_> {
         } else {
             generated.end
         };
-        Ok(ChunkStats {
+        let stats = ChunkStats {
             tokens: self.tokens.len(),
             frames: generated.frames,
             max_frames: self.max_frames,
@@ -524,7 +646,38 @@ impl Run<'_> {
             samples,
             generation_ms: self.started.elapsed().as_millis(),
             first_audio_ms,
-        })
+            forced_frames: self.forced.len(),
+        };
+        Ok((stats, generated.latents))
+    }
+
+    /// Teacher-forces [`Self::forced`] after the text: BOS, then every forced
+    /// frame but the last, which is the input of the first generated step, as
+    /// upstream does. Their outputs, EOS included, are dropped: EOS can only
+    /// fire on new frames. Returns that first input, or None to start from BOS.
+    ///
+    /// Upstream feeds the text and the frames in one pass. xn-ptts has no
+    /// public call for that, but a step accepts several frames and runs them
+    /// as one pass, sampling only the last position, so this costs two passes
+    /// and two discarded samples rather than one step per frame.
+    fn force<Q>(
+        &self,
+        model: &TTSModel<Q>,
+        state: &mut TTSState<Q>,
+        noise: &mut Noise<'_>,
+    ) -> Result<Option<Tensor<f32, CpuDevice>>>
+    where
+        Q: BackendQ<T = f32, B = CpuDevice>,
+    {
+        let Some((last, rest)) = self.forced.split_last() else {
+            return Ok(None);
+        };
+        model.generate_step(state, StepInput::Bos { batch: 1 }, noise)?;
+        if !rest.is_empty() {
+            let rest: Vec<&Tensor<f32, CpuDevice>> = rest.iter().collect();
+            model.generate_step(state, StepInput::Latent(&Tensor::cat(&rest, 1)?), noise)?;
+        }
+        Ok(Some(last.clone()))
     }
 
     fn autoregress<Q>(
@@ -539,14 +692,19 @@ impl Run<'_> {
     where
         Q: BackendQ<T = f32, B = CpuDevice>,
     {
-        let mut previous: Option<Tensor<f32, CpuDevice>> = None;
+        // The prefill runs here, on the generating thread, so that a
+        // continuation's decoder warmup runs alongside it rather than after.
+        model.prompt_text(state, self.tokens)?;
+        let mut previous = self.force(model, state, noise)?;
         let mut eos_frame = None;
+        let mut latents = Vec::new();
         for frame in 0..self.max_frames {
             if cancel.is_cancelled() || stop.load(Ordering::Relaxed) {
                 return Ok(Generated {
                     frames: frame,
                     eos_frame,
                     end: EndReason::Cancelled,
+                    latents,
                 });
             }
             let input = match &previous {
@@ -562,6 +720,7 @@ impl Run<'_> {
                     frames: frame,
                     eos_frame,
                     end: EndReason::EndOfSpeech,
+                    latents,
                 });
             }
             // A closed channel means decoding stopped; it reports why.
@@ -570,7 +729,11 @@ impl Run<'_> {
                     frames: frame,
                     eos_frame,
                     end: EndReason::Cancelled,
+                    latents,
                 });
+            }
+            if self.keep_latents {
+                latents.push(latent.clone());
             }
             previous = Some(latent);
         }
@@ -578,6 +741,7 @@ impl Run<'_> {
             frames: self.max_frames,
             eos_frame,
             end: EndReason::Budget,
+            latents,
         })
     }
 
@@ -604,7 +768,15 @@ impl Run<'_> {
         let mut mimi_state = model.init_mimi_state(1)?;
         // A fresh Mimi decoder state puts a small step in its first samples,
         // heard as a click at the start of every chunk: fade the first 5 ms in.
+        // A continuation instead runs the decoder over the previous chunk's
+        // last frames, audio dropped, so there is no fresh state to fade.
         let mut fade_in = true;
+        let warmup = &self.forced[self.forced.len().saturating_sub(DECODER_WARMUP_FRAMES)..];
+        if !warmup.is_empty() {
+            let refs: Vec<&Tensor<f32, CpuDevice>> = warmup.iter().collect();
+            model.decode_latent(&Tensor::cat(&refs, 1)?, &mut mimi_state)?;
+            fade_in = false;
+        }
         while let Ok(latent) = latent_rx.recv() {
             if cancel.is_cancelled() {
                 return Ok(Decoded::Stopped);

@@ -23,6 +23,22 @@ class FakeEngine(
     var caller: String? = null
         private set
 
+    /** Every read started, in order; each chunk in [spoken] went to [readOf]'s. */
+    val reads = mutableListOf<FakeRead>()
+    val readOf = mutableListOf<FakeRead?>()
+
+    class FakeRead : SpeechEngine.Read {
+        @Volatile
+        var closed = false
+            private set
+
+        override fun close() {
+            closed = true
+        }
+    }
+
+    override fun startRead(): SpeechEngine.Read = FakeRead().also { synchronized(reads) { reads += it } }
+
     /** Completed by the test to let a synthesis call finish, when it wants control. */
     var gate: CompletableDeferred<Unit>? = null
 
@@ -34,6 +50,7 @@ class FakeEngine(
     override suspend fun synthesize(
         text: String,
         speed: Float,
+        read: SpeechEngine.Read,
         onAudio: (FloatArray) -> Boolean,
     ): Boolean {
         // Deliberately not instant. A fake that returns before its caller can
@@ -43,7 +60,9 @@ class FakeEngine(
         // CI. Half a real sentence would be seconds; this is enough to keep
         // the window open without slowing the suite.
         delay(WORK_MILLIS)
+        check(!(read is FakeRead && read.closed)) { "synthesised into a closed read" }
         spoken += text
+        readOf += read as? FakeRead
         if (text == failOn) throw IllegalStateException("synthesis exploded")
         gate?.await()
         return onAudio(FloatArray(sampleRate / 10))

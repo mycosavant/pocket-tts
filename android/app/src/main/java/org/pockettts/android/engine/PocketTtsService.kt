@@ -209,12 +209,18 @@ class PocketTtsService : TextToSpeechService() {
         // different voices. See EngineTurn.
         val turn = EngineTurn.take()
         var token: NativeEngine.CancelToken? = null
+        var continuation: NativeEngine.Continuation? = null
 
         try {
             // Made before waiting for the engine, so a stop during the wait
             // still lands on this request. Inside the try: loading the native
             // library can fail, and that should be a synthesis error.
             val cancel = NativeEngine.CancelToken().also { token = it; current = it }
+            // The request's chunks carry on from each other; see
+            // Settings.continueChunks. Closed in the finally, after runBlocking
+            // has waited for the producer.
+            val continuing = settings.continueChunks
+            if (continuing) continuation = NativeEngine.Continuation()
             runBlocking {
                 // Another language than the last request's loads its model in
                 // place of the last one: one at a time fits a phone's memory.
@@ -244,7 +250,7 @@ class PocketTtsService : TextToSpeechService() {
                 // chunk could not start until this one had all but played:
                 // its text prefill, longer than that half second on a phone,
                 // was heard as a silence at every chunk.
-                val chunks = TextChunker.chunk(speakable)
+                val chunks = TextChunker.chunk(speakable, continuing)
                 val pieces = Channel<Piece>(Channel.UNLIMITED)
                 // The chunk being delivered plus one composed ahead.
                 val permits = Semaphore(2)
@@ -268,6 +274,7 @@ class PocketTtsService : TextToSpeechService() {
                                     temperature,
                                     seed,
                                     cancel,
+                                    continuation,
                                 ) { samples ->
                                     val giveUp = !self.isActive || stopRequested.get() || EngineTurn.superseded(turn)
                                     if (!giveUp) pieces.trySend(Piece(index, samples))
@@ -318,6 +325,7 @@ class PocketTtsService : TextToSpeechService() {
         } finally {
             current = null
             token?.close()
+            continuation?.close()
         }
     }
 

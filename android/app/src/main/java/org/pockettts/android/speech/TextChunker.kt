@@ -35,6 +35,16 @@ object TextChunker {
     private const val TARGET = 200
     private const val MAX = 400
 
+    /**
+     * Sizes for chunks that continue each other (`Settings.continueChunks`),
+     * which the model reads two at a time: about upstream's 25 tokens with
+     * its `teacher_force_previous_chunk`, at the 3.3 characters a token that
+     * English prose measures. At 50 tokens upstream's 2m model skipped words.
+     * Also the shorter wait for the first chunk.
+     */
+    private const val CONTINUING_TARGET = 80
+    private const val CONTINUING_MAX = 160
+
     private const val PARAGRAPH_PAUSE = 0.45f
     private const val SENTENCE_PAUSE = 0.0f
 
@@ -115,6 +125,10 @@ object TextChunker {
 
     private fun wordCount(sentence: String): Int =
         sentence.split(Regex("""\s+""")).count { WORD_CHARACTER.containsMatchIn(it) }
+
+    /** Chunks sized for a read whose chunks continue each other, or not. */
+    fun chunk(speakable: String, continuing: Boolean): List<Chunk> =
+        if (continuing) chunk(speakable, CONTINUING_TARGET, CONTINUING_MAX) else chunk(speakable)
 
     fun chunk(speakable: String, target: Int = TARGET, max: Int = MAX): List<Chunk> {
         val chunks = mutableListOf<Chunk>()

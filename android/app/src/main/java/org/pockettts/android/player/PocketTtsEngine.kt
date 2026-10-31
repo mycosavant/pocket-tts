@@ -2,6 +2,7 @@ package org.pockettts.android.player
 
 import android.content.Context
 import org.pockettts.android.engine.ModelManager
+import org.pockettts.android.engine.NativeEngine
 import org.pockettts.android.engine.PocketTts
 import org.pockettts.android.engine.Settings
 import org.pockettts.android.engine.VoiceCatalog
@@ -33,9 +34,16 @@ class PocketTtsEngine(
         voice = resolve(voiceId)
     }
 
+    private class NativeRead(val continuation: NativeEngine.Continuation) : SpeechEngine.Read {
+        override fun close() = continuation.close()
+    }
+
+    override fun startRead(): SpeechEngine.Read = NativeRead(NativeEngine.Continuation())
+
     override suspend fun synthesize(
         text: String,
         speed: Float,
+        read: SpeechEngine.Read,
         onAudio: (FloatArray) -> Boolean,
     ): Boolean {
         val loaded = voice ?: resolve(VoiceCatalog.DEFAULT_VOICE_ID).also { voice = it }
@@ -48,6 +56,7 @@ class PocketTtsEngine(
             settings.decodeSteps,
             settings.temperatureFor(tts.modelName),
             settings.voiceSeed,
+            continuation = (read as? NativeRead)?.continuation,
             onAudio = onAudio,
         )
     }

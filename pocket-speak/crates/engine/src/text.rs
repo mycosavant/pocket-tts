@@ -38,9 +38,19 @@ pub enum Chunking {
 }
 
 impl Chunking {
+    /// For chunks that each start afresh from the voice.
     pub const PACKED_DEFAULT: Self = Self::Packed {
         target: 200,
         max: 400,
+        join_tail: true,
+    };
+    /// For chunks read with a [`crate::Continuation`], which feeds the model
+    /// two at once: about upstream's 25 tokens with its
+    /// `teacher_force_previous_chunk`, at the 3.3 characters a token English
+    /// prose measures. At 50 tokens upstream's 2m model skipped words.
+    pub const PACKED_CONTINUING: Self = Self::Packed {
+        target: 80,
+        max: 160,
         join_tail: true,
     };
 }

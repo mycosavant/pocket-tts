@@ -138,6 +138,20 @@ class Settings(context: Context) {
         get() = prefs.getBoolean(KEY_STEADY_VOICE, true)
         set(value) = prefs.edit { putBoolean(KEY_STEADY_VOICE, value) }
 
+    /**
+     * Whether each chunk of a read continues the one before it, rather than
+     * starting afresh from the voice prompt. Upstream's
+     * `teacher_force_previous_chunk`: the previous chunk's text and audio are
+     * fed to the model ahead of this one's, so its pace and pitch carry on
+     * across the junction instead of resetting there. Chunks are cut about
+     * half as long with it (TextChunker), since the model reads two at once.
+     * Costs a prefill per chunk, which the lookahead hides behind the chunk
+     * playing; off is for a phone where that makes reading fall behind.
+     */
+    var continueChunks: Boolean
+        get() = prefs.getBoolean(KEY_CONTINUE_CHUNKS, true)
+        set(value) = prefs.edit { putBoolean(KEY_CONTINUE_CHUNKS, value) }
+
     /** The seed to hand the generator, or -1 for a fresh draw each sentence. */
     val voiceSeed: Int get() = if (steadyVoice) FIXED_SEED else RANDOM_SEED
 
@@ -316,6 +330,7 @@ class Settings(context: Context) {
         private const val KEY_CODE_BLOCKS = "speak_code_blocks"
         private const val KEY_SELECTION_MARKDOWN = "selection_markdown"
         private const val KEY_STEADY_VOICE = "steady_voice"
+        private const val KEY_CONTINUE_CHUNKS = "continue_chunks"
         private const val KEY_TEMPERATURE = "temperature"
         private const val KEY_TEMPERATURE_MIGRATED = "temperature_follows_model"
         private const val KEY_SCRATCHPAD = "scratchpad"
