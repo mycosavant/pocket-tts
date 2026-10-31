@@ -25,12 +25,13 @@ does the same.
 | `--out PATH` | write a 16-bit, 24 kHz, mono WAV instead of playing; `--play` does both |
 | `--model NAME` | `english_2026-10` by default. The model sets the language; `pocket-speak models` lists them |
 | `--voice NAME\|PATH` | the model's default voice: `alba` for English, Kyutai's pick for each other language. `install` fetches all 27 voices of a model unless `--voice` is given (repeat it for several) |
-| `--chunking MODE` | `packed` (default), `sentence` (one generation per sentence), or `packed-raw` (no tail join, for measuring) |
+| `--chunking MODE` | `packed` (default), `sentence` (one generation per sentence), or `packed-raw` (no tail join, for measuring). `packed` targets 80 characters, or 200 with `--fresh-chunks` |
+| `--fresh-chunks` | start every chunk afresh from the voice. By default each chunk continues the previous one: the model is given the previous chunk's text and audio first, so pace and pitch carry across the junction (upstream's `teacher_force_previous_chunk`) |
 | `--plain` | do not strip Markdown |
 | `--seed N` | fixed sampling seed, for repeatable audio |
 | `--threads N` | threads for the model; 2 by default |
 | `--float` | float weights instead of int8. The 2m models are always float |
-| `--stats` | on stderr: one JSON line naming the model and its weights, then one line per chunk with token and frame counts, how generation ended, and speed |
+| `--stats` | on stderr: one JSON line naming the model and its weights, then one line per chunk with token and frame counts, how generation ended, the previous chunk's frames it continued (`forced_frames`), and speed |
 | `--model-dir DIR` | defaults to `$POCKET_TTS_MODEL_DIR`. Otherwise `%LOCALAPPDATA%\pocket-tts-rs\<model>` on Windows, or `$XDG_CACHE_HOME/pocket-tts-rs/<model>` (or `~/.cache/pocket-tts-rs/<model>` without `XDG_CACHE_HOME`) elsewhere |
 
 ## Models

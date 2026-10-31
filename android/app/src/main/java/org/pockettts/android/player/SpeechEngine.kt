@@ -30,13 +30,32 @@ interface SpeechEngine {
     suspend fun useVoice(voiceId: String, caller: String)
 
     /**
-     * Synthesises [text], handing samples to [onAudio] as they are produced.
+     * One read's run of chunks, in order. Each chunk synthesised with it
+     * carries on from the one before, rather than starting afresh from the
+     * voice (`Settings.continueChunks`). A skip starts another, since the
+     * chunk it lands on does not follow the one last composed. Closed once
+     * the read has stopped synthesising.
+     */
+    interface Read : AutoCloseable
+
+    /** Every chunk afresh from the voice: what an engine without reads does. */
+    object Fresh : Read {
+        override fun close() {}
+    }
+
+    /** Starts a read whose chunks continue each other. */
+    fun startRead(): Read = Fresh
+
+    /**
+     * Synthesises [text] as the next chunk of [read], handing samples to
+     * [onAudio] as they are produced.
      *
      * @return false if [onAudio] asked to stop before the end.
      */
     suspend fun synthesize(
         text: String,
         speed: Float,
+        read: Read,
         onAudio: (FloatArray) -> Boolean,
     ): Boolean
 

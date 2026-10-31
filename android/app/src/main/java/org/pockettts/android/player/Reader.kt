@@ -227,6 +227,8 @@ object Reader {
         val chunks: List<TextChunker.Chunk>,
         val engine: SpeechEngine,
         val speed: Float,
+        /** Whether its chunks continue each other; see [SpeechEngine.Read]. */
+        val continuing: Boolean,
     )
 
     @Volatile
@@ -544,9 +546,10 @@ object Reader {
                 turn = EngineTurn.take(),
                 source = source,
                 speakable = speakable,
-                chunks = TextChunker.chunk(speakable),
+                chunks = TextChunker.chunk(speakable, continuing = settings.continueChunks),
                 engine = engine,
                 speed = settings.speed,
+                continuing = settings.continueChunks,
             )
             utterance = prepared
             play(prepared, from = 0, askedAt = askedAt)
@@ -554,7 +557,7 @@ object Reader {
             throw cancelled
         } catch (error: Throwable) {
             Log.e(TAG, "Reading failed", error)
-            _state.value = State.Failed(id, source, error.message ?: error.javaClass.simpleName)
+            _state.value = State.Failed(id, source, failureMessage(error))
         }
     }
 
@@ -600,6 +603,10 @@ object Reader {
             return
         }
         var localPlayer: AudioSink? = null
+        // From here on, so a skip, which plays from another chunk, starts its
+        // own: the chunk it lands on does not follow the last one composed.
+        // Closed in the finally, after the producer below has finished.
+        val read = if (current.continuing) current.engine.startRead() else SpeechEngine.Fresh
         try {
             localPlayer = sinks.create(current.engine.sampleRate).also {
                 player = it
@@ -641,7 +648,7 @@ object Reader {
                             val chunk = current.chunks[index]
                             val startedAt = System.currentTimeMillis()
                             var samplesProduced = 0L
-                            val spoke = current.engine.synthesize(chunk.speech, current.speed) { samples ->
+                            val spoke = current.engine.synthesize(chunk.speech, current.speed, read) { samples ->
                                 // The engine only looks at this between pieces,
                                 // so a stop is felt within one piece rather than
                                 // at the end of the chunk.
@@ -743,12 +750,28 @@ object Reader {
             throw cancelled
         } catch (error: Throwable) {
             Log.e(TAG, "Reading failed", error)
-            _state.value = State.Failed(current.id, current.source, error.message ?: error.javaClass.simpleName)
+            _state.value = State.Failed(current.id, current.source, failureMessage(error))
         } finally {
+            read.close()
             localPlayer?.let { Metrics.underruns = it.underruns }
             localPlayer?.release()
             if (player === localPlayer) player = null
         }
+    }
+
+    /**
+     * What a failed read tells the listener. The exception's own message is
+     * written for whoever reads the log, and the ones a read meets most, a
+     * download with no connection, say nothing a listener can act on.
+     */
+    @VisibleForTesting
+    internal fun failureMessage(error: Throwable): String = when (error) {
+        is java.net.UnknownHostException,
+        is java.net.ConnectException,
+        is java.net.SocketTimeoutException,
+        -> "No connection, and the voice model or voice is not downloaded yet. " +
+            "Connect once, or download it in Pocket TTS."
+        else -> error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
     }
 
     private fun speakingState(current: Utterance, index: Int, paused: Boolean, audible: Boolean): State.Speaking {
@@ -775,12 +798,22 @@ object Reader {
     @VisibleForTesting
     internal const val LOOKAHEAD_CHUNKS = 1
 
+    /**
+     * Counts pauses and resumes, so [AudioFocus] can tell whether the pause it
+     * caused is still the one in effect when focus comes back.
+     */
+    @Volatile
+    var pauseChanges: Int = 0
+        private set
+
     fun pause() {
+        pauseChanges++
         player?.pause()
         (_state.value as? State.Speaking)?.let { _state.value = it.copy(paused = true) }
     }
 
     fun resume() {
+        pauseChanges++
         player?.resume()
         (_state.value as? State.Speaking)?.let { _state.value = it.copy(paused = false) }
     }

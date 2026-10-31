@@ -107,12 +107,13 @@ other apps ─────▶ PocketTtsService ───┘      ▼
 
 - `ui/ModelPickerActivity` chooses the model, and with it the language. It shows a heading per language. For English the choices are Best quality (`english_2026-10`, 219 MB), Balanced (`english_18m_2026-10`, 112 MB), Small (`english_7m_2026-10`, 67 MB) and Smallest (`english_2m_2026-10`, 47 MB). Each other language has one 219 MB model. A download asks first, showing the size and a warning on a metered connection. The model is put to use when its download finishes, even if the screen has gone. Each row is announced to TalkBack as a radio button with its state and what a double tap does. Deleting is a separate button.
 - `speech/MarkdownSpeech` turns Markdown into speakable prose. A table is read the way a screen reader reads one: it is announced ("Table, 2 rows."), then read row by row under its column names. A table wider than four columns is announced with its column names and not read (issue #10). Inline code is always read, as words. The "Read code blocks aloud" setting covers fenced blocks only (issue #9).
-- `speech/TextChunker` cuts text at sentence boundaries, so the first audio arrives quickly and stopping takes effect quickly. A chunk targets 200 characters and never exceeds 400.
+- `speech/TextChunker` cuts text at sentence boundaries, so the first audio arrives quickly and stopping takes effect quickly. A chunk targets 80 characters and never exceeds 160 when chunks continue each other (the default), or 200 and 400 when they do not.
 - `engine/PocketTts` owns the single loaded model and serialises synthesis.
 - `engine/PocketTtsService` is the system engine. `engine/SystemVoices` names its voices per language: `selected` and `alba` for English, as before, and `selected-fr` and `alba-fr` for French. A request is read in the language of its voice if it names one. Otherwise it is read in the language the request asks for, and failing that, in the app's reading language.
 - `player/StreamingPlayer` writes float PCM to an `AudioTrack` with blocking writes. A blocking write slows generation to the speed of playback.
 - `player/PlaybackService` is a foreground service, so reading continues after the floating window is dismissed. It holds audio focus while it plays.
-- `player/AudioFocus` requests audio focus and gives it back. Without it, the app read over whatever was already playing, a phone call did not pause it (muting the media stream during a call is up to the vendor), and unplugging headphones kept the voice playing from the phone's speaker. A transient loss pauses and resumes. A permanent loss stops, because another app has taken over for as long as it likes, and a paused reader nobody asked for helps no one. The app declines ducking, because two voices at once cannot both be followed.
+- `player/AudioFocus` requests audio focus and gives it back. Without it, the app read over whatever was already playing, a phone call did not pause it (muting the media stream during a call is up to the vendor), and unplugging headphones kept the voice playing from the phone's speaker. A transient loss pauses, and regaining focus resumes only a pause the loss caused, not one the listener chose. A permanent loss stops, because another app has taken over for as long as it likes, and a paused reader nobody asked for helps no one. A refused request, during a call for instance, stops the read, and the next read asks again. The app declines ducking, because two voices at once cannot both be followed.
+- A read that fails posts a "Could not read that" notification, which stays after the playback service has gone, and the media session reports an error with the reason. A read from the broadcast has no window to show the reason in.
 
 `MarkdownSpeech`, `TextChunker` and `WavReader` are plain JVM code and have unit tests in `app/src/test`.
 
@@ -224,7 +225,11 @@ The system engine served a voice chosen weeks ago. Android resolves an engine's 
 
 ## One generation per chunk
 
-The app asks the engine for one chunk at a time, and the engine generates each chunk in a single pass. `TextChunker` cuts text at sentence boundaries, targets 200 characters and never exceeds 400, so a chunk is usually a sentence or two. Each chunk costs one start of the model.
+The app asks the engine for one chunk at a time, and the engine generates each chunk in a single pass. `TextChunker` cuts text at sentence boundaries, so a chunk is usually a sentence or two.
+
+By default each chunk continues the one before it ("Read each passage as one" in settings). This is upstream's `teacher_force_previous_chunk`. The engine gives the model the previous chunk's text and this one's, feeds the previous chunk's frames back in before generating, and warms the decoder on the last 12 of them. Pace and pitch then carry across the junction instead of resetting. A chunk that is cancelled or fails leaves nothing to continue, and a skip starts afresh. Because the model reads two chunks at once, chunks target 80 characters (about upstream's 25 tokens) and never exceed 160. With the setting off they target 200 and never exceed 400, and each chunk starts afresh from the voice.
+
+On a desktop CPU with 2 threads and the `english_2026-10` model, continuing costs about 250 ms before each chunk's first audio and about 30% more generation time over a 35-second passage. The lookahead hides both behind the chunk playing. Whisper heard the same words either way: one error in about 140 words, over three seeds.
 
 In the sherpa-onnx era, the engine split each chunk again and started over once per sentence. On the device where it was measured, that produced clipped first syllables and seams between sentences. Sending whole chunks removed almost all of the clipping there.
 

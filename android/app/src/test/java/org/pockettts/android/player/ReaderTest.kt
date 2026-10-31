@@ -216,6 +216,14 @@ class ReaderTest {
     }
 
     @Test
+    fun `a failure says what to do, not what the network stack said`() {
+        val offline = Reader.failureMessage(java.net.UnknownHostException("Unable to resolve host \"huggingface.co\""))
+        assertTrue(offline, offline.startsWith("No connection"))
+        assertEquals("synthesis exploded", Reader.failureMessage(IllegalStateException("synthesis exploded")))
+        assertEquals("IllegalStateException", Reader.failureMessage(IllegalStateException()))
+    }
+
+    @Test
     fun `every utterance releases its sink`() = runBlocking {
         readToEnd()
         readToEnd("A second one.")
@@ -241,6 +249,23 @@ class ReaderTest {
         // The last chunk again, and nothing before it re-synthesised.
         assertEquals(beforeSkip + 1, engine.spoken.size)
         assertEquals(engine.spoken[beforeSkip - 1], engine.spoken.last())
+    }
+
+    @Test
+    fun `a read's chunks share one continuation, and a skip starts another`() = runBlocking {
+        val id = readToEnd("One first thing.\n\nTwo second thing.\n\nThree third thing.")
+        assertEquals(3, engine.spoken.size)
+        assertEquals(1, engine.reads.size)
+        assertTrue(engine.readOf.all { it === engine.reads[0] })
+        assertTrue("the read was left open", engine.reads[0].closed)
+
+        // The chunk a skip lands on does not follow the last one composed.
+        Reader.skipBack()
+        awaitUntil("the skipped sentence was re-read") { engine.spoken.size > 3 }
+        awaitFor(id, "finished after skip") { it is Reader.State.Finished }
+        assertEquals(2, engine.reads.size)
+        assertTrue(engine.readOf.last() === engine.reads[1])
+        assertTrue(engine.reads[1].closed)
     }
 
     @Test

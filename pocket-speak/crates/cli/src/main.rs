@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use pocket_tts_engine::text::{self, Chunking};
-use pocket_tts_engine::{Cancel, ChunkStats, EndReason, Engine, LoadOptions};
+use pocket_tts_engine::{Cancel, ChunkStats, Continuation, EndReason, Engine, LoadOptions};
 
 /// The desk's default: the largest model, which a desktop runs well faster
 /// than real time.
@@ -29,7 +29,10 @@ given); `models` lists the models on offer and their languages.
                       french, german, spanish, italian, portuguese, dutch)
   --model-dir DIR     its directory (default: $POCKET_TTS_MODEL_DIR, else the cache)
   --voice NAME|PATH   voice (default: the model's, alba for English)
-  --chunking MODE     sentence | packed | packed-raw (default: packed)
+  --chunking MODE     sentence | packed | packed-raw (default: packed, in
+                      chunks half as long unless --fresh-chunks)
+  --fresh-chunks      start each chunk afresh from the voice, not as a
+                      continuation of the previous one
   --plain             do not strip Markdown
   --seed N            reproducible sampling
   --threads N         threads for the model (default: 2)
@@ -44,7 +47,10 @@ struct Options {
     model_dir: Option<PathBuf>,
     /// None: the model's default voice.
     voice: Option<String>,
-    chunking: Chunking,
+    /// None: packed, sized for continuing or fresh chunks.
+    chunking: Option<Chunking>,
+    /// Each chunk from the voice alone, not continuing the previous one.
+    fresh_chunks: bool,
     plain: bool,
     seed: Option<u64>,
     threads: usize,
@@ -75,7 +81,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         model: DEFAULT_MODEL.to_string(),
         model_dir: None,
         voice: None,
-        chunking: Chunking::PACKED_DEFAULT,
+        chunking: None,
+        fresh_chunks: false,
         plain: false,
         seed: None,
         threads: 2,
@@ -92,7 +99,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--model-dir" => options.model_dir = Some(PathBuf::from(value("--model-dir")?)),
             "--voice" => options.voice = Some(value("--voice")?),
             "--chunking" => {
-                options.chunking = match value("--chunking")?.as_str() {
+                options.chunking = Some(match value("--chunking")?.as_str() {
                     "sentence" => Chunking::Sentence,
                     "packed" => Chunking::PACKED_DEFAULT,
                     "packed-raw" => Chunking::Packed {
@@ -101,8 +108,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                         join_tail: false,
                     },
                     other => return Err(format!("unknown chunking {other:?}")),
-                }
+                })
             }
+            "--fresh-chunks" => options.fresh_chunks = true,
             "--plain" => options.plain = true,
             "--seed" => {
                 options.seed = Some(
@@ -200,7 +208,12 @@ fn run(options: Options) -> Result<(), String> {
     } else {
         text::speakable_in(&input, &model.language)
     };
-    let chunks = text::chunk(&speakable, options.chunking);
+    let chunking = options.chunking.unwrap_or(if options.fresh_chunks {
+        Chunking::PACKED_DEFAULT
+    } else {
+        Chunking::PACKED_CONTINUING
+    });
+    let chunks = text::chunk(&speakable, chunking);
     if chunks.is_empty() {
         return Err("nothing to say".to_string());
     }
@@ -271,10 +284,14 @@ fn run(options: Options) -> Result<(), String> {
     };
 
     let cancel = Cancel::new();
+    let mut continuation = Continuation::new();
     for (index, chunk) in chunks.iter().enumerate() {
         let mut failure: Option<String> = None;
+        if options.fresh_chunks {
+            continuation.reset();
+        }
         let stats = engine
-            .synthesize(&chunk.speech, &voice, &cancel, |pcm| {
+            .synthesize_continuing(&chunk.speech, &voice, &mut continuation, &cancel, |pcm| {
                 if let Some(writer) = writer.as_mut() {
                     for sample in pcm {
                         let quantized = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
@@ -332,7 +349,7 @@ fn stats_line(index: usize, speech: &str, stats: &ChunkStats, sample_rate: u32) 
         EndReason::Cancelled => "cancelled",
     };
     format!(
-        "{{\"chunk\":{index},\"chars\":{},\"tokens\":{},\"frames\":{},\"max_frames\":{},\"eos_frame\":{},\"end\":\"{end}\",\"audio_s\":{audio_seconds:.2},\"gen_ms\":{},\"first_audio_ms\":{},\"x_realtime\":{speed:.2}}}",
+        "{{\"chunk\":{index},\"chars\":{},\"tokens\":{},\"frames\":{},\"max_frames\":{},\"eos_frame\":{},\"end\":\"{end}\",\"audio_s\":{audio_seconds:.2},\"gen_ms\":{},\"first_audio_ms\":{},\"forced_frames\":{},\"x_realtime\":{speed:.2}}}",
         speech.chars().count(),
         stats.tokens,
         stats.frames,
@@ -340,5 +357,6 @@ fn stats_line(index: usize, speech: &str, stats: &ChunkStats, sample_rate: u32) 
         or_null(stats.eos_frame.map(|frame| frame.to_string())),
         stats.generation_ms,
         or_null(stats.first_audio_ms.map(|ms| ms.to_string())),
+        stats.forced_frames,
     )
 }

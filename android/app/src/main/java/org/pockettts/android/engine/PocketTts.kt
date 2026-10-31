@@ -119,6 +119,8 @@ class PocketTts private constructor(
      * @param cancel stops this generation at the next frame once cancelled, or
      *   at the first if it already was. Its owner makes it before calling, so
      *   a cancel during the wait for [synthesisLock] is not lost.
+     * @param continuation the read this chunk belongs to, which it carries on
+     *   from; null starts it afresh from the voice.
      * @param onAudio receives float samples, clamped to [-1, 1]; return false
      *   to abandon the rest of this utterance.
      * @return false if generation was stopped early.
@@ -132,6 +134,7 @@ class PocketTts private constructor(
         temperature: Float,
         seed: Int,
         cancel: NativeEngine.CancelToken? = null,
+        continuation: NativeEngine.Continuation? = null,
         onAudio: (FloatArray) -> Boolean,
     ): Boolean = synthesisLock.withLock {
         if (closed || voice.owner !== this) throw ModelChangedException(modelName)
@@ -147,7 +150,7 @@ class PocketTts private constructor(
                 }
             }
             try {
-                val stats = engine.synthesize(voice.handle, text, temperature, seed.toLong(), cancel) { samples ->
+                val stats = engine.synthesize(voice.handle, text, temperature, seed.toLong(), cancel, continuation) { samples ->
                     if (firstSampleMillis < 0) firstSampleMillis = System.currentTimeMillis() - startedAt
                     // The decoder can overshoot full scale. Sonic narrows
                     // floats to 16-bit without a clamp, so an overshoot would

@@ -27,11 +27,21 @@ class NativeEngine private constructor(private var handle: Long) : AutoCloseable
     /**
      * Synthesises one chunk. [seed] below zero keeps the running generator.
      * [cancel], if given, stops it at the next frame once cancelled - or at
-     * the first, if it was cancelled before this call.
+     * the first, if it was cancelled before this call. [continuation], if
+     * given, makes the chunk carry on from the last one completed with it.
      * @return the chunk's stats as JSON, as the engine reports them.
      */
-    fun synthesize(voice: Long, text: String, temperature: Float, seed: Long, cancel: CancelToken?, sink: Sink): String =
-        nativeSynthesize(handle, voice, text, temperature, seed, cancel?.raw() ?: 0L, sink)
+    fun synthesize(
+        voice: Long,
+        text: String,
+        temperature: Float,
+        seed: Long,
+        cancel: CancelToken?,
+        continuation: Continuation?,
+        sink: Sink,
+    ): String = nativeSynthesize(
+        handle, voice, text, temperature, seed, cancel?.raw() ?: 0L, continuation?.raw() ?: 0L, sink,
+    )
 
     override fun close() {
         val h = handle
@@ -66,6 +76,26 @@ class NativeEngine private constructor(private var handle: Long) : AutoCloseable
         }
     }
 
+    /**
+     * One read's chunks, each continuing the last one completed with it, as
+     * the engine's `Continuation` does: the previous chunk's text and frames
+     * are fed to the model first. A chunk that is cancelled or fails leaves
+     * it empty, so the next starts afresh from the voice. Its owner closes it
+     * once the read has stopped synthesising.
+     */
+    class Continuation : AutoCloseable {
+        private var continuation = nativeNewContinuation()
+
+        @Synchronized
+        internal fun raw(): Long = continuation
+
+        @Synchronized
+        override fun close() {
+            nativeFreeContinuation(continuation)
+            continuation = 0
+        }
+    }
+
     companion object {
         init {
             System.loadLibrary("pocket_tts_jni")
@@ -87,6 +117,8 @@ class NativeEngine private constructor(private var handle: Long) : AutoCloseable
         @JvmStatic private external fun nativeNewCancel(): Long
         @JvmStatic private external fun nativeCancel(token: Long)
         @JvmStatic private external fun nativeFreeCancel(token: Long)
+        @JvmStatic private external fun nativeNewContinuation(): Long
+        @JvmStatic private external fun nativeFreeContinuation(continuation: Long)
         @JvmStatic private external fun nativeSynthesize(
             handle: Long,
             voice: Long,
@@ -94,6 +126,7 @@ class NativeEngine private constructor(private var handle: Long) : AutoCloseable
             temperature: Float,
             seed: Long,
             token: Long,
+            continuation: Long,
             sink: Sink,
         ): String
     }

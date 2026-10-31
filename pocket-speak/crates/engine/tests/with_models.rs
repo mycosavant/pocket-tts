@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use pocket_tts_engine::{Cancel, EndReason, Engine, models};
+use pocket_tts_engine::{Cancel, Continuation, EndReason, Engine, models};
 
 // One engine at a time: each is up to a few hundred MB.
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -164,6 +164,81 @@ fn a_cancelled_or_stopped_chunk_says_so() {
         // And the engine reads normally afterwards.
         let (stats, _) = run(&mut engine, &dir, "Still here.", &Cancel::new(), None);
         assert_eq!(stats.end, EndReason::EndOfSpeech, "{name}");
+    }
+}
+
+/// A continuation carries on from the chunk it last completed, in the same
+/// voice only, and a cancelled chunk leaves nothing to carry on from.
+#[test]
+fn a_continuation_follows_the_last_completed_chunk() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for (name, dir) in installed() {
+        let model = models::find(&name).unwrap();
+        let mut engine = Engine::load(&dir, &name, 2).unwrap();
+        let alba = engine
+            .load_voice(&dir.join("embeddings/alba.safetensors"))
+            .unwrap();
+        let other = engine
+            .load_voice(&dir.join(format!("embeddings/{}.safetensors", model.default_voice)))
+            .unwrap();
+        let mut continuation = Continuation::new();
+        let mut read = |engine: &mut Engine, voice, text: &str, cancel: &Cancel| {
+            let mut audio = Vec::new();
+            let stats = engine
+                .synthesize_continuing(text, voice, &mut continuation, cancel, |pcm| {
+                    audio.extend_from_slice(pcm);
+                    true
+                })
+                .unwrap();
+            (stats, audio)
+        };
+
+        let (first, _) = read(
+            &mut engine,
+            &alba,
+            "The first part is short.",
+            &Cancel::new(),
+        );
+        assert_eq!(first.forced_frames, 0, "{name}: {first:?}");
+        assert_eq!(first.end, EndReason::EndOfSpeech, "{name}: {first:?}");
+
+        let (second, audio) = read(
+            &mut engine,
+            &alba,
+            "And the second one follows it.",
+            &Cancel::new(),
+        );
+        assert_eq!(second.forced_frames, first.frames, "{name}: {second:?}");
+        assert_eq!(second.end, EndReason::EndOfSpeech, "{name}: {second:?}");
+        assert_eq!(second.samples, audio.len(), "{name}");
+        let seconds = audio.len() as f32 / engine.sample_rate() as f32;
+        assert!(
+            (0.8..6.0).contains(&seconds),
+            "{name}: {seconds} s of new audio"
+        );
+        // No fade-in: the decoder was warmed on the first chunk's frames.
+        assert_ne!(audio[0], 0.0, "{name}");
+
+        // Another voice, even one loaded from the same file, is another state.
+        let (in_other, _) = read(
+            &mut engine,
+            &other,
+            "Another voice starts afresh.",
+            &Cancel::new(),
+        );
+        assert_eq!(in_other.forced_frames, 0, "{name}: {in_other:?}");
+
+        let cancel = Cancel::new();
+        cancel.cancel();
+        let (cancelled, _) = read(&mut engine, &alba, "Never heard.", &cancel);
+        assert_eq!(cancelled.end, EndReason::Cancelled, "{name}");
+        let (after, _) = read(
+            &mut engine,
+            &alba,
+            "So this one starts afresh.",
+            &Cancel::new(),
+        );
+        assert_eq!(after.forced_frames, 0, "{name}: {after:?}");
     }
 }
 

@@ -100,26 +100,21 @@ class StreamingPlayer(private val sampleRate: Int) : AudioSink {
         }
     }
 
-    /** Blocks until everything already written has been played. */
+    /**
+     * Blocks until everything already written has been played. Time spent
+     * paused does not count: a pause during the last buffer used to let the
+     * wait run out while the end of the read was still unheard, and the
+     * release that followed flushed it.
+     */
     override fun drain() {
         val active = track ?: return
-        if (stopped.get()) return
-        // There is no "wait for drain" on a streaming AudioTrack, so wait out
-        // the samples we know are still queued.
-        val queued = queuedFrames(active)
-        if (queued > 0) {
-            val millis = (queued * 1000L / sampleRate).coerceAtMost(MAX_DRAIN_MILLIS)
-            val deadline = System.currentTimeMillis() + millis
-            while (System.currentTimeMillis() < deadline && !stopped.get()) {
-                Thread.sleep(DRAIN_POLL_MILLIS)
-            }
-        }
-    }
-
-    private fun queuedFrames(active: AudioTrack): Long {
-        val written = writtenFrames
-        val played = active.playbackHeadPosition.toLong() and 0xFFFFFFFFL
-        return (written - played).coerceAtLeast(0)
+        awaitPlayout(
+            written = writtenFrames,
+            head = { active.playbackHeadPosition.toLong() and 0xFFFFFFFFL },
+            paused = paused::get,
+            stopped = stopped::get,
+            awaitResume = ::awaitResume,
+        )
     }
 
     private var writtenFrames: Long = 0
@@ -155,6 +150,46 @@ class StreamingPlayer(private val sampleRate: Int) : AudioSink {
         const val BUFFER_MULTIPLIER = 4
         const val PAUSE_POLL_MILLIS = 200L
         const val DRAIN_POLL_MILLIS = 50L
-        const val MAX_DRAIN_MILLIS = 30_000L
+
+        /**
+         * How long the playback head may stand still, while playing, before a
+         * drain gives up on the frames it has not reached. Some devices stop
+         * reporting a few frames short of the end of a stream.
+         */
+        const val STALL_MILLIS = 500L
+
+        /**
+         * Waits until the playback [head] reaches [written] frames, or [stopped].
+         * While [paused] it waits in [awaitResume] instead, and that time does
+         * not count towards a stall.
+         */
+        internal fun awaitPlayout(
+            written: Long,
+            head: () -> Long,
+            paused: () -> Boolean,
+            stopped: () -> Boolean,
+            awaitResume: () -> Unit,
+            now: () -> Long = System::currentTimeMillis,
+            sleep: (Long) -> Unit = Thread::sleep,
+        ) {
+            var lastHead = -1L
+            var movedAt = now()
+            while (!stopped()) {
+                if (paused()) {
+                    awaitResume()
+                    movedAt = now()
+                    continue
+                }
+                val played = head()
+                if (played >= written) return
+                if (played != lastHead) {
+                    lastHead = played
+                    movedAt = now()
+                } else if (now() - movedAt > STALL_MILLIS) {
+                    return
+                }
+                sleep(DRAIN_POLL_MILLIS)
+            }
+        }
     }
 }

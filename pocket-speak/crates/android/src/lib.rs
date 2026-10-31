@@ -1,7 +1,8 @@
 //! The desk's engine inside the Android app.
 //!
 //! `org.pockettts.android.engine.NativeEngine` is the only caller. An engine,
-//! a voice and a cancel token are each a box handed to Kotlin as a `long`.
+//! a voice, a cancel token and a continuation are each a box handed to Kotlin
+//! as a `long`.
 //!
 //! The engine sits behind a mutex, and that mutex is load-bearing: Kotlin
 //! serialises synthesis, but it loads voices outside that lock, so the mutex is
@@ -29,7 +30,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use jni::JNIEnv;
 use jni::objects::{JClass, JFloatArray, JObject, JString, JValue};
 use jni::sys::{jfloat, jint, jlong, jstring};
-use pocket_tts_engine::{Cancel, Engine, Voice};
+use pocket_tts_engine::{Cancel, Continuation, Engine, Voice};
 
 /// Runs `body`, turning an error or a panic into a Java exception and
 /// `fallback`.
@@ -68,9 +69,9 @@ fn string(env: &mut JNIEnv, value: &JString) -> Result<String, String> {
 /// The engine behind `raw`, locked, poisoned or not (see the module doc).
 /// Every entry point locks it through here, so none refuses after a panic.
 fn lock<'a>(raw: jlong) -> MutexGuard<'a, Engine> {
-    // SAFETY: `raw` came from nativeLoad. The app loads one engine per process
-    // and never frees it (NativeEngine.close has no caller), so it outlives
-    // every call made on it.
+    // SAFETY: `raw` came from nativeLoad. Kotlin frees it (PocketTts.retire)
+    // only under the locks every native call on it takes, after marking the
+    // engine closed, so no call reaches a freed engine.
     let engine = unsafe { &*(raw as *const Mutex<Engine>) };
     engine.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -181,9 +182,32 @@ pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeFree
     }
 }
 
+/// A continuation for one read. Free it with nativeFreeContinuation.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeNewContinuation(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jlong {
+    Box::into_raw(Box::new(Mutex::new(Continuation::new()))) as jlong
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeFreeContinuation(
+    _env: JNIEnv,
+    _class: JClass,
+    continuation: jlong,
+) {
+    if continuation != 0 {
+        // SAFETY: from nativeNewContinuation, released once.
+        drop(unsafe { Box::from_raw(continuation as *mut Mutex<Continuation>) });
+    }
+}
+
 /// Synthesises one chunk, calling `sink.onAudio(float[])` as audio is decoded.
 /// `seed` below 0 keeps the running generator; otherwise sampling restarts
 /// from it. `token` is a cancel token from nativeNewCancel, or 0 for none.
+/// `continuation` is one from nativeNewContinuation, which the chunk continues
+/// and records itself in, or 0 to start afresh from the voice.
 /// Returns the chunk's stats as JSON, or null after throwing.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
@@ -196,11 +220,13 @@ pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeSynt
     temperature: jfloat,
     seed: jlong,
     token: jlong,
+    continuation: jlong,
     sink: JObject,
 ) -> jstring {
     guarded(&mut env, std::ptr::null_mut(), |env| {
         let text = string(env, &text)?;
-        // SAFETY: from nativeLoadVoice; the app never frees a loaded voice.
+        // SAFETY: from nativeLoadVoice. Kotlin frees voices only in
+        // PocketTts.retire, under the lock synthesis holds.
         let voice = unsafe { &*(voice as *const Voice) };
         let cancel = if token == 0 {
             Cancel::new()
@@ -209,13 +235,22 @@ pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeSynt
             // after the synthesis it was handed to has returned.
             unsafe { &*(token as *const Cancel) }.clone()
         };
+        // SAFETY: from nativeNewContinuation, and Kotlin frees it only after
+        // the read it belongs to has stopped synthesising. Behind a mutex, a
+        // panic in a chunk leaves it poisoned; the chunk took what it held, so
+        // the next starts afresh, which is what a failed chunk should cause.
+        let mut continuation = (continuation != 0).then(|| {
+            unsafe { &*(continuation as *const Mutex<Continuation>) }
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+        });
         let mut engine = lock(raw);
         engine.set_temperature(temperature);
         if seed >= 0 {
             engine.set_seed(seed as u64);
         }
         let mut failure: Option<String> = None;
-        let result = engine.synthesize(&text, voice, &cancel, |samples| {
+        let sink = |samples: &[f32]| {
             let call = (|| {
                 let array: JFloatArray = env.new_float_array(samples.len() as i32)?;
                 env.set_float_array_region(&array, 0, samples)?;
@@ -229,14 +264,20 @@ pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeSynt
                 failure = Some(format!("audio sink: {error}"));
                 false
             })
-        });
+        };
+        let result = match continuation.as_deref_mut() {
+            Some(continuation) => {
+                engine.synthesize_continuing(&text, voice, continuation, &cancel, sink)
+            }
+            None => engine.synthesize(&text, voice, &cancel, sink),
+        };
         drop(engine);
         if let Some(message) = failure {
             return Err(message);
         }
         let stats = result.map_err(|e| e.to_string())?;
         let json = format!(
-            "{{\"tokens\":{},\"frames\":{},\"max_frames\":{},\"eos_frame\":{},\"end\":\"{:?}\",\"samples\":{},\"generation_ms\":{},\"first_audio_ms\":{}}}",
+            "{{\"tokens\":{},\"frames\":{},\"max_frames\":{},\"eos_frame\":{},\"end\":\"{:?}\",\"samples\":{},\"generation_ms\":{},\"first_audio_ms\":{},\"forced_frames\":{}}}",
             stats.tokens,
             stats.frames,
             stats.max_frames,
@@ -247,6 +288,7 @@ pub extern "system" fn Java_org_pockettts_android_engine_NativeEngine_nativeSynt
             stats
                 .first_audio_ms
                 .map_or("null".into(), |f| f.to_string()),
+            stats.forced_frames,
         );
         env.new_string(json)
             .map(|s| s.into_raw())

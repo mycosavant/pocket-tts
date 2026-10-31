@@ -1,11 +1,19 @@
 package org.pockettts.android.player
 
 import android.app.Notification
+import android.app.NotificationManager
+import android.content.Context
 import android.os.Build
+import android.os.Looper
+import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.pockettts.android.engine.EngineTurn
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
@@ -67,5 +75,38 @@ class PlaybackServiceTest {
 
         assertFalse(shadowOf(controller.get()).isStoppedBySelf)
         controller.destroy()
+    }
+
+    @Test
+    fun `a failed read leaves a notification that outlasts the service`() = runBlocking<Unit> {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        EngineTurn.resetForTesting()
+        Reader.resetForTesting()
+        Reader.engines = FakeEngine.Factory(FakeEngine(failOn = "Boom."))
+        Reader.sinks = FakeSink.Factory()
+        try {
+            val controller = Robolectric.buildService(PlaybackService::class.java).create()
+            val id = Reader.speak(context, "Boom.", treatAsMarkdown = false, source = Reader.Source.Agent)
+            controller.startCommand(0, 0)
+            withTimeout(5_000) { Reader.state.first { it.utterance == id && it is Reader.State.Failed } }
+            // The service hears of it on the main looper, posted from the
+            // reader's thread, so possibly just after this test did.
+            val manager = context.getSystemService(NotificationManager::class.java)
+            var failure: Notification? = null
+            var tries = 0
+            while (failure == null && tries++ < 100) {
+                shadowOf(Looper.getMainLooper()).idle()
+                failure = shadowOf(manager).getNotification(PlaybackService.FAILURE_NOTIFICATION_ID)
+                if (failure == null) Thread.sleep(10)
+            }
+            assertTrue("no failure notification", failure != null)
+            assertEquals("synthesis exploded", failure!!.extras.getString(Notification.EXTRA_TEXT))
+            assertTrue(shadowOf(controller.get()).isStoppedBySelf)
+            controller.destroy()
+        } finally {
+            Reader.resetForTesting()
+            Reader.engines = PocketTtsEngine
+            Reader.sinks = StreamingPlayer
+        }
     }
 }

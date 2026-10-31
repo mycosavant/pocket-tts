@@ -40,4 +40,4 @@ mod tokenizer;
 #[path = "../../../../rust/src/weights.rs"]
 mod weights;
 
-pub use synth::{Cancel, ChunkStats, EndReason, Engine, Error, LoadOptions, Voice};
+pub use synth::{Cancel, ChunkStats, Continuation, EndReason, Engine, Error, LoadOptions, Voice};
