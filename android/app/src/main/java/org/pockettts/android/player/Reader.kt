@@ -557,7 +557,7 @@ object Reader {
             throw cancelled
         } catch (error: Throwable) {
             Log.e(TAG, "Reading failed", error)
-            _state.value = State.Failed(id, source, error.message ?: error.javaClass.simpleName)
+            _state.value = State.Failed(id, source, failureMessage(error))
         }
     }
 
@@ -750,13 +750,28 @@ object Reader {
             throw cancelled
         } catch (error: Throwable) {
             Log.e(TAG, "Reading failed", error)
-            _state.value = State.Failed(current.id, current.source, error.message ?: error.javaClass.simpleName)
+            _state.value = State.Failed(current.id, current.source, failureMessage(error))
         } finally {
             read.close()
             localPlayer?.let { Metrics.underruns = it.underruns }
             localPlayer?.release()
             if (player === localPlayer) player = null
         }
+    }
+
+    /**
+     * What a failed read tells the listener. The exception's own message is
+     * written for whoever reads the log, and the ones a read meets most, a
+     * download with no connection, say nothing a listener can act on.
+     */
+    @VisibleForTesting
+    internal fun failureMessage(error: Throwable): String = when (error) {
+        is java.net.UnknownHostException,
+        is java.net.ConnectException,
+        is java.net.SocketTimeoutException,
+        -> "No connection, and the voice model or voice is not downloaded yet. " +
+            "Connect once, or download it in Pocket TTS."
+        else -> error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
     }
 
     private fun speakingState(current: Utterance, index: Int, paused: Boolean, audible: Boolean): State.Speaking {

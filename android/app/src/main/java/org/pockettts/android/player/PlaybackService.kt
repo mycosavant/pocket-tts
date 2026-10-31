@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
 import android.os.IBinder
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -93,24 +94,42 @@ class PlaybackService : Service() {
             return START_NOT_STICKY
         }
 
-        focus.request()
+        // Refused during a call, say. Reading over it is what this exists to
+        // prevent, so the read stops, and the service with it.
+        if (!focus.request()) {
+            Log.i(TAG, "Audio focus refused; stopping the read")
+            Reader.stop()
+        }
 
         if (watcher == null) {
             watcher = scope.launch {
                 Reader.state.collectLatest { state ->
                     transport.update(state)
                     when (state) {
-                        is Reader.State.Speaking ->
+                        is Reader.State.Speaking -> {
+                            notificationManager.cancel(FAILURE_NOTIFICATION_ID)
                             notificationManager.notify(
                                 NOTIFICATION_ID,
                                 buildNotification(state.paused, audible = state.audible),
                             )
+                        }
 
-                        is Reader.State.Preparing ->
+                        // A new read makes the last one's failure old news.
+                        is Reader.State.Preparing -> {
+                            notificationManager.cancel(FAILURE_NOTIFICATION_ID)
                             notificationManager.notify(
                                 NOTIFICATION_ID,
                                 buildNotification(paused = false, audible = false),
                             )
+                        }
+
+                        // Said where it outlasts the service: the read may have
+                        // no window (an agent's broadcast, a dismissed popup),
+                        // and the media notification goes with the service.
+                        is Reader.State.Failed -> {
+                            notifyFailure(state)
+                            stopSelf()
+                        }
 
                         // Idle means the reader has not started yet - the
                         // service is deliberately started first, so that the
@@ -143,6 +162,34 @@ class PlaybackService : Service() {
         )
         channel.setShowBadge(false)
         notificationManager.createNotificationChannel(channel)
+        notificationManager.createNotificationChannel(
+            NotificationChannel(
+                FAILURE_CHANNEL_ID,
+                getString(R.string.failure_channel),
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+    }
+
+    /** A read that failed, as a notification that stays until it is dismissed. */
+    private fun notifyFailure(state: Reader.State.Failed) {
+        val notification = Notification.Builder(this, FAILURE_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(getString(R.string.read_failed))
+            .setContentText(state.message)
+            .setStyle(Notification.BigTextStyle().bigText(state.message))
+            .setCategory(Notification.CATEGORY_ERROR)
+            .setAutoCancel(true)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    this,
+                    0,
+                    Intent(this, MainActivity::class.java),
+                    PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+            .build()
+        notificationManager.notify(FAILURE_NOTIFICATION_ID, notification)
     }
 
     /**
@@ -226,6 +273,9 @@ class PlaybackService : Service() {
         private const val TAG = "PlaybackService"
         private const val CHANNEL_ID = "playback"
         private const val NOTIFICATION_ID = 1
+        private const val FAILURE_CHANNEL_ID = "failures"
+        @VisibleForTesting
+        internal const val FAILURE_NOTIFICATION_ID = 2
         private const val NOTIFICATION_PREVIEW_CHARS = 200
 
         const val ACTION_TOGGLE_PAUSE = "org.pockettts.android.TOGGLE_PAUSE"

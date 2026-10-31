@@ -284,10 +284,14 @@ class TransportTest {
             PlaybackState.STATE_STOPPED,
             Transport.playbackStateOf(Reader.State.Finished(1, Reader.Source.Scratchpad)),
         )
-        assertEquals(
-            PlaybackState.STATE_STOPPED,
-            Transport.playbackStateOf(Reader.State.Failed(1, Reader.Source.Scratchpad, "no")),
-        )
+    }
+
+    @Test
+    fun `a failed read is published as an error, with its reason`() {
+        val failed = Reader.State.Failed(1, Reader.Source.Agent, "No connection")
+        assertEquals(PlaybackState.STATE_ERROR, Transport.playbackStateOf(failed))
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        assertEquals("No connection", Transport.playbackState(context, failed).errorMessage.toString())
     }
 
     @Test

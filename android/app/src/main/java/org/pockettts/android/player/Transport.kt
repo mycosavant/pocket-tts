@@ -188,6 +188,7 @@ class Transport(private val context: Context) {
                     ).build(),
                 )
                 .setState(playbackStateOf(state), PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
+                .apply { if (state is Reader.State.Failed) setErrorMessage(state.message) }
                 .build()
 
         /** The key a media-button intent carries, if it carries one. */
@@ -207,6 +208,7 @@ class Transport(private val context: Context) {
             state is Reader.State.Speaking && state.paused -> PlaybackState.STATE_PAUSED
             state is Reader.State.Speaking && !state.audible -> PlaybackState.STATE_BUFFERING
             state is Reader.State.Speaking -> PlaybackState.STATE_PLAYING
+            state is Reader.State.Failed -> PlaybackState.STATE_ERROR
             else -> PlaybackState.STATE_STOPPED
         }
 

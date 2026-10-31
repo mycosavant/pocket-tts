@@ -41,6 +41,8 @@
     <string name="import_voice">Import a voice from a wav file</string>
     <string name="imported_voice">Imported: %1$s</string>
     <string name="voice_import_failed">Could not read that file as a wav: %1$s</string>
+    <string name="failure_channel">Reading problems</string>
+    <string name="read_failed">Could not read that</string>
     <string name="error_generic">Something went wrong: %1$s</string>
     <string name="nothing_to_read">No readable text in that selection.</string>
     <string name="crash_title">Pocket TTS crashed last time</string>

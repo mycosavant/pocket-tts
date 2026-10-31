@@ -216,6 +216,14 @@ class ReaderTest {
     }
 
     @Test
+    fun `a failure says what to do, not what the network stack said`() {
+        val offline = Reader.failureMessage(java.net.UnknownHostException("Unable to resolve host \"huggingface.co\""))
+        assertTrue(offline, offline.startsWith("No connection"))
+        assertEquals("synthesis exploded", Reader.failureMessage(IllegalStateException("synthesis exploded")))
+        assertEquals("IllegalStateException", Reader.failureMessage(IllegalStateException()))
+    }
+
+    @Test
     fun `every utterance releases its sink`() = runBlocking {
         readToEnd()
         readToEnd("A second one.")

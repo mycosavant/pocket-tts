@@ -28,8 +28,17 @@ class AudioFocus(private val context: Context) {
     private val manager: AudioManager? =
         context.getSystemService(AudioManager::class.java)
 
+    /** The request focus was granted to; null until it is, and after release. */
     private var request: AudioFocusRequest? = null
     private var noisyReceiver: BroadcastReceiver? = null
+
+    /**
+     * Whether the pause in effect is a transient loss's, which regaining focus
+     * may undo. A pause the listener asked for is theirs to end: resuming it
+     * on every gain restarted a read paused by hand as soon as a notification
+     * sound finished.
+     */
+    private var pausedForLoss = false
 
     /**
      * Whether focus was lost for good rather than for a moment.
@@ -48,13 +57,26 @@ class AudioFocus(private val context: Context) {
 
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
-            -> Reader.pause()
+            -> {
+                val playing = (Reader.state.value as? Reader.State.Speaking)?.paused == false
+                if (playing) {
+                    pausedForLoss = true
+                    Reader.pause()
+                }
+            }
 
-            AudioManager.AUDIOFOCUS_GAIN -> Reader.resume()
+            AudioManager.AUDIOFOCUS_GAIN -> if (pausedForLoss) {
+                pausedForLoss = false
+                Reader.resume()
+            }
         }
     }
 
-    /** @return false when the system refused, in which case nothing should play. */
+    /**
+     * @return false when the system refused, during a call for instance, in
+     *   which case nothing should play. A refusal is not remembered, so the
+     *   next read asks again.
+     */
     fun request(): Boolean {
         val audio = manager ?: return true
         // Asked for on every start command, and a queued read makes a second
@@ -73,10 +95,14 @@ class AudioFocus(private val context: Context) {
             // competing, and neither is intelligible. Pause instead.
             .setWillPauseWhenDucked(true)
             .build()
+        if (audio.requestAudioFocus(focus) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            Log.i(TAG, "Focus refused")
+            return false
+        }
         request = focus
-
+        pausedForLoss = false
         registerNoisyReceiver()
-        return audio.requestAudioFocus(focus) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        return true
     }
 
     fun release() {
