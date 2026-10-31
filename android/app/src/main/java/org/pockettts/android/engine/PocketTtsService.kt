@@ -7,7 +7,10 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.TextToSpeechService
 import android.speech.tts.Voice
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.job
@@ -41,6 +44,46 @@ class PocketTtsService : TextToSpeechService() {
 
     private val catalog: ModelCatalog get() = ModelCatalog.get(this)
 
+    /** Loads ahead of requests; see [warmUp]. Cancelled with the service. */
+    private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    override fun onCreate() {
+        super.onCreate()
+        warmUp(Settings(this).readingLanguage)
+    }
+
+    override fun onDestroy() {
+        background.cancel()
+        super.onDestroy()
+    }
+
+    /**
+     * Loads [language]'s model and voice before anyone asks for speech.
+     *
+     * Android kills a cached process routinely, and the first request after
+     * that paid for the whole load inside onSynthesizeText, before the caller
+     * heard anything: the first thing TalkBack said each time was late. Only
+     * what is already on the phone is loaded; a download stays the app's
+     * screens' business. A request arriving meanwhile waits for this load
+     * rather than starting another (PocketTts.get).
+     */
+    private fun warmUp(language: String) {
+        val settings = Settings(this)
+        val model = settings.modelFor(language) ?: return
+        // Never in place of a model already loaded: that would free it under
+        // a read in progress, for a request that may not come.
+        if (PocketTts.peek().let { it != null && it.modelName != model }) return
+        val manager = ModelManager(this, model)
+        if (!manager.isModelInstalled) return
+        val voice = VoiceCatalog.byId(settings.voiceFor(language)) ?: VoiceCatalog.default()
+        background.launch {
+            runCatching {
+                val engine = PocketTts.get(this@PocketTtsService, model)
+                if (manager.voiceFile(voice.id).isFile) engine.loadVoice(voice)
+            }.onFailure { Log.w(TAG, "Could not load $model ahead of a request", it) }
+        }
+    }
+
     /** The request being synthesised, so [onStop] cancels that one and no other. */
     @Volatile
     private var current: NativeEngine.CancelToken? = null
@@ -70,8 +113,14 @@ class PocketTtsService : TextToSpeechService() {
         }
     }
 
-    public override fun onLoadLanguage(lang: String?, country: String?, variant: String?): Int =
-        onIsLanguageAvailable(lang, country, variant)
+    public override fun onLoadLanguage(lang: String?, country: String?, variant: String?): Int {
+        val available = onIsLanguageAvailable(lang, country, variant)
+        // Called when a client sets its language, ahead of its first request.
+        if (available >= TextToSpeech.LANG_AVAILABLE) {
+            SystemVoices.languageOf(lang, catalog.languages)?.let(::warmUp)
+        }
+        return available
+    }
 
     public override fun onGetLanguage(): Array<String> {
         val settings = Settings(this)
