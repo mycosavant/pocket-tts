@@ -14,12 +14,14 @@ Claude Code (proot Ubuntu, under Termux)
   └─ speak-last.sh          finds the transcript, pulls the last reply
        └─ am broadcast      →  SpeakReceiver
                                  └─ Reader.speak(..., Source.Agent)
-                                 └─ PlaybackService   notification, lock screen,
+                                 └─ NowPlaying        notification, lock screen,
                                                       media session, audio focus
+                                 └─ PlaybackService   keeps the process alive
 ```
 
 Nothing about the reading is new. `SpeakReceiver` takes the same route through
-`Reader` and `PlaybackService` that the floating "Read aloud" window takes. So
+`Reader`, `NowPlaying` and `PlaybackService` that the floating "Read aloud" window
+takes. So
 `MarkdownSpeech` strips the Markdown exactly as it does for the scratchpad, and
 the four transport controls are the same four.
 
@@ -111,12 +113,15 @@ be registered as a `Stop` hook with no changes:
 ## Controls, and the battery setting they need
 
 A read started this way begins with Pocket TTS in the background, and Android
-refuses a foreground service started from there. The read still plays, because the
-reader does not depend on the service. Without the service there is no
-notification, no lock-screen or quick-settings controls, no audio-focus claim, and
-nothing stops the system from killing the read mid-sentence.
+refuses a foreground service started from there. The read still plays, with its
+notification and its lock-screen and quick-settings controls, because those do not
+depend on the service. Two things do go missing. Nothing stops the system from
+killing a long read mid-sentence. And Android 16 refuses audio focus to an app that
+asks from the background, so a phone call does not pause the read. Tapping a
+control in the notification lets the service start, which brings back the first
+of the two.
 
-Allowing Pocket TTS to run unrestricted in the battery settings is what grants it.
+Allowing Pocket TTS to run unrestricted in the battery settings avoids both.
 On a Samsung device: *Settings → Apps → Pocket TTS → Battery → Unrestricted*. With
 that set, a broadcast read appears in the shade with skip back, pause and stop, and
 forward once the player is expanded. The lock screen shows back, pause and stop as
@@ -128,8 +133,8 @@ sentence end where one is available. A short reply is one chunk, so forward on i
 ends the read, and starts the next queued piece if there is one.
 
 Timings says which of the two happened: `playback service: started`, or
-`refused (...)` with the reason. So "it read but there were no controls" has an
-answer on the device rather than in a log nobody can reach.
+`refused (...)` with the reason. So "a long read stopped halfway" has an answer on
+the device rather than in a log nobody can reach.
 
 ## When nothing comes out
 

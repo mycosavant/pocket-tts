@@ -109,6 +109,24 @@ class AudioFocus(private val context: Context) {
         return true
     }
 
+    /**
+     * Whether a call is ringing or under way.
+     *
+     * A refused request does not say why. During a call it means "stay
+     * quiet", and Android 16 also refuses an app that asks from the
+     * background, which a read sent over the broadcast does. Stopping on both
+     * meant an agent's read without a battery exemption never played at all.
+     */
+    val callInProgress: Boolean
+        get() = when (manager?.mode) {
+            AudioManager.MODE_RINGTONE,
+            AudioManager.MODE_IN_CALL,
+            AudioManager.MODE_IN_COMMUNICATION,
+            AudioManager.MODE_CALL_SCREENING,
+            -> true
+            else -> false
+        }
+
     fun release() {
         request?.let { manager?.abandonAudioFocusRequest(it) }
         request = null

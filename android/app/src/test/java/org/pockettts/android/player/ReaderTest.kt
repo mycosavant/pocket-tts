@@ -489,6 +489,106 @@ class ReaderTest {
         awaitUntil("the reader went idle") { !Reader.isActive }
     }
 
+    @Test
+    fun `the reader is busy as soon as speak returns, whatever the state still says`() = runBlocking {
+        // The playback service is started on the next line after speak, and
+        // it used to read the state to decide whether to stay. The state was
+        // still the last read's Finished, so it stopped under the new read.
+        val earlier = readToEnd()
+        awaitUntil("the earlier read let go") { !Reader.isBusy }
+
+        engine.gate = CompletableDeferred()
+        Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Selection)
+        assertTrue("not busy straight after speak", Reader.isBusy)
+        assertEquals("the state had already moved on, so this test proves nothing", earlier, Reader.state.value.utterance)
+        engine.gate?.complete(Unit)
+        awaitUntil("busy ends with the read") { !Reader.isBusy }
+    }
+
+    @Test
+    fun `the reader stays busy from one queued read to the next`() = runBlocking {
+        // The first read's Finished is in the state while the second is still
+        // to start. Anything that took that for "over" took the notification,
+        // the session and focus with it, and the second read played bare.
+        val busyAtFirstEnding = CompletableDeferred<Boolean>()
+        engine.gate = CompletableDeferred()
+        val first = Reader.speak(context, "First passage.", treatAsMarkdown = false, source = Reader.Source.Agent)
+        val watcher = CoroutineScope(Dispatchers.Unconfined).launch {
+            Reader.state.first { it.utterance == first && it is Reader.State.Finished }
+            busyAtFirstEnding.complete(Reader.isBusy)
+        }
+        awaitFor(first, "speaking") { it is Reader.State.Speaking }
+        val second = Reader.enqueue(context, "Second passage.", treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitUntil("the second read is queued") { Reader.queued == 1 }
+
+        engine.gate?.complete(Unit)
+        awaitFor(second, "second finished") { it is Reader.State.Finished }
+        assertTrue("idle between two queued reads", withTimeout(TIMEOUT_MS) { busyAtFirstEnding.await() })
+        awaitUntil("busy ends after the last read") { !Reader.isBusy }
+        watcher.cancel()
+    }
+
+    @Test
+    fun `a read that was skipped within still starts what was queued behind it`() = runBlocking {
+        // A skip launched its read without the completion handler that
+        // advances the queue, so the queue waited for good.
+        engine.gate = CompletableDeferred()
+        val first = Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitFor(first, "speaking") { it is Reader.State.Speaking }
+        val second = Reader.enqueue(context, "Second passage.", treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitUntil("the second read is queued") { Reader.queued == 1 }
+        awaitUntil("the first read reached the engine") { engine.spoken.isNotEmpty() }
+
+        Reader.skipBack()
+        awaitUntil("the skip re-read the sentence") { engine.spoken.size >= 2 }
+        engine.gate?.complete(Unit)
+
+        awaitFor(second, "second finished") { it is Reader.State.Finished }
+        assertEquals("Second passage.", engine.spoken.last())
+    }
+
+    @Test
+    fun `a skip never lets the reader look idle`() = runBlocking {
+        // A skip stops the chunk in progress and launches the new one, and
+        // the busy count used to pass through zero between the two. The
+        // playback service reads zero as "stop", and does not come back.
+        engine.gate = CompletableDeferred()
+        val id = Reader.speak(context, threeChunks, treatAsMarkdown = false, source = Reader.Source.Selection)
+        awaitFor(id, "speaking") { it is Reader.State.Speaking }
+        awaitUntil("the first chunk reached the engine") { engine.spoken.isNotEmpty() }
+
+        val seen = java.util.Collections.synchronizedList(mutableListOf<Boolean>())
+        val recorder = CoroutineScope(Dispatchers.Unconfined).launch { Reader.busy.collect { seen += it } }
+        Reader.skipForward()
+        awaitUntil("the skip reached the engine") { engine.spoken.size >= 2 }
+        recorder.cancel()
+        engine.gate?.complete(Unit)
+
+        assertFalse("busy went false during a skip: $seen", false in seen)
+    }
+
+    @Test
+    fun `a stop straight after speak stops that read, whichever runs first`() = runBlocking {
+        // What NowPlaying does when focus is refused during a call. The stop
+        // and the read each launch a coroutine, and if the stop took the lock
+        // first it found nothing playing and the read started after it.
+        Reader.beforeRequest = { delay(50) }
+        repeat(3) {
+            val id = Reader.speak(context, "During a call.", treatAsMarkdown = false, source = Reader.Source.Agent)
+            Reader.stop()
+            awaitFor(id, "stopped") { it is Reader.State.Stopped }
+            awaitUntil("the reader let go") { !Reader.isBusy }
+        }
+        assertFalse("a stopped read was heard", Reader.state.value is Reader.State.Finished)
+        assertTrue("a read stopped before it began reached the engine: ${engine.spoken}", engine.spoken.isEmpty())
+    }
+
+    @Test
+    fun `a stop with nothing playing leaves the reader idle`() = runBlocking {
+        Reader.stop()
+        awaitUntil("the stop was handled") { !Reader.isBusy }
+    }
+
     /**
      * Polls [check], for the things that are true of the world rather than of
      * one state.

@@ -11,9 +11,13 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -208,8 +212,52 @@ object Reader {
     }
 
     private val control = Mutex()
+
+    @Volatile
     private var job: Job? = null
     private var player: AudioSink? = null
+
+    /**
+     * How many things are holding the reader busy: one per read asked for
+     * whose request has not been handled yet, plus one while a read is playing
+     * or queued.
+     *
+     * A count in one flow rather than two flags, because what matters is that
+     * it never passes through zero on the way from one read to the next. A
+     * request is counted on the caller's thread, before `speak` returns, so a
+     * screen that starts [PlaybackService] straight after can never find the
+     * reader idle with its own read still to begin. That is what the service
+     * found when it watched the state instead: the previous read's ending,
+     * still in the flow, and it shut itself down under the new read.
+     */
+    private val holds = MutableStateFlow(0)
+
+    /** Whether [holds] carries the playing-or-queued hold. Only touched under [control]. */
+    private var runningHeld = false
+
+    /**
+     * True from the moment a read is asked for until nothing is playing,
+     * starting or queued.
+     *
+     * The state cannot say this. Between two queued reads it is the first
+     * one's [State.Finished], and for the moment between `speak` and the new
+     * read's [State.Preparing] it is whatever the last read ended with. Both
+     * look like "over" to anything that only reads the state, and the media
+     * notification, the session and audio focus all went with them while the
+     * next read played on.
+     */
+    val busy: Flow<Boolean> = holds.map { it > 0 }.distinctUntilChanged()
+
+    /** [busy], now. */
+    val isBusy: Boolean get() = holds.value > 0
+
+    /** Brings the playing-or-queued hold up to date. Caller holds [control]. */
+    private fun refreshLocked() {
+        val running = job?.isActive == true || queue.isNotEmpty()
+        if (running == runningHeld) return
+        runningHeld = running
+        holds.update { if (running) it + 1 else it - 1 }
+    }
 
     /**
      * The current utterance, minus its position.
@@ -332,6 +380,11 @@ object Reader {
                 stopLocked(ending = null)
             }
         }
+        holds.value = 0
+        runningHeld = false
+        stoppedAt = 0
+        order.set(0)
+        beforeRequest = null
         utterance = null
         currentSource = null
         currentUtterance = 0
@@ -359,21 +412,68 @@ object Reader {
         // A voice sample auditioning in the picker must not talk over the thing
         // the user actually asked to hear.
         VoiceSample.stop()
-        scope.launch {
-            control.withLock {
-                // A read that replaces what is playing replaces what was going
-                // to play after it too. Queued follow-ups belong to the passage
-                // being abandoned, not to the one taking over.
-                queue.clear()
-                // No terminal state on the way out: this is a handover, not an
-                // ending, and anything watching for "the read is over" would
-                // otherwise tear down and immediately rebuild.
-                stopLocked(ending = null)
-                startLocked(Pending(id, appContext, text, treatAsMarkdown, voiceOverride, source))
+        request { stopped ->
+            if (stopped) {
+                // Stopped before it began. Said, so a window waiting for this
+                // read's ending is not left waiting.
+                _state.value = State.Stopped(id, source)
+                return@request
             }
+            // A read that replaces what is playing replaces what was going
+            // to play after it too. Queued follow-ups belong to the passage
+            // being abandoned, not to the one taking over.
+            queue.clear()
+            // No terminal state on the way out: this is a handover, not an
+            // ending, and anything watching for "the read is over" would
+            // otherwise tear down and immediately rebuild.
+            stopLocked(ending = null)
+            startLocked(Pending(id, appContext, text, treatAsMarkdown, voiceOverride, source))
         }
         return id
     }
+
+    /**
+     * Runs [block] under [control], holding the reader [busy] from now until
+     * it has run.
+     *
+     * [block] is told whether a [stop] was asked for after this request was.
+     * Each request and each stop launches its own coroutine, and nothing
+     * orders which of them takes [control] first, so without this a stop
+     * could run before the read it was meant to stop, find nothing playing,
+     * and let the read start after it. The order is taken here, on the
+     * caller's thread, where it is the order things were asked for.
+     */
+    private fun request(block: suspend (stopped: Boolean) -> Unit) {
+        val ticket = order.incrementAndGet()
+        holds.update { it + 1 }
+        scope.launch {
+            try {
+                beforeRequest?.invoke()
+                control.withLock {
+                    block(stoppedAt > ticket)
+                    refreshLocked()
+                }
+            } finally {
+                holds.update { it - 1 }
+            }
+        }
+    }
+
+    /**
+     * Runs before a request takes [control], so a test can make a later stop
+     * reach the lock first. That is the order the tickets exist for, and
+     * without a way to force it the race is won by the request nearly every
+     * time.
+     */
+    @VisibleForTesting
+    internal var beforeRequest: (suspend () -> Unit)? = null
+
+    /** Hands out the tickets [request] and [stop] are ordered by. */
+    private val order = AtomicLong(0)
+
+    /** The ticket of the most recent [stop]. */
+    @Volatile
+    private var stoppedAt = 0L
 
     /**
      * Reads [text] after whatever is playing, rather than instead of it.
@@ -397,15 +497,14 @@ object Reader {
     ): Long {
         val appContext = context.applicationContext
         val id = nextUtterance.incrementAndGet()
-        scope.launch {
-            control.withLock {
-                val pending = Pending(id, appContext, text, treatAsMarkdown, voiceOverride, source)
-                if (job?.isActive == true || queue.isNotEmpty()) {
-                    queue.addLast(pending)
-                } else {
-                    VoiceSample.stop()
-                    startLocked(pending)
-                }
+        request { stopped ->
+            if (stopped) return@request
+            val pending = Pending(id, appContext, text, treatAsMarkdown, voiceOverride, source)
+            if (job?.isActive == true || queue.isNotEmpty()) {
+                queue.addLast(pending)
+            } else {
+                VoiceSample.stop()
+                startLocked(pending)
             }
         }
         return id
@@ -418,7 +517,7 @@ object Reader {
     private fun startLocked(pending: Pending) {
         currentSource = pending.source
         currentUtterance = pending.id
-        val started = scope.launch {
+        launchLocked {
             run(
                 pending.context,
                 pending.id,
@@ -428,6 +527,18 @@ object Reader {
                 pending.source,
             )
         }
+    }
+
+    /**
+     * Makes [block] the read in progress. Caller holds [control].
+     *
+     * Every read goes through here, a skip's included, because the completion
+     * handler is what starts the queue's next read. A skip used to launch its
+     * own job without one, so a read that had been skipped within finished
+     * and left everything queued behind it waiting for good.
+     */
+    private fun launchLocked(block: suspend () -> Unit) {
+        val started = scope.launch { block() }
         job = started
         // Advancing the queue from inside the job would deadlock: a stop holds
         // `control` while it joins this very job, so the job cannot take the
@@ -439,6 +550,7 @@ object Reader {
         started.invokeOnCompletion { cause ->
             if (cause == null) scope.launch { advance(started) }
         }
+        refreshLocked()
     }
 
     /** Starts whatever [finished] was holding up. */
@@ -446,17 +558,19 @@ object Reader {
         control.withLock {
             // Somebody took over while the completion handler was in flight;
             // the queue is theirs now.
-            if (job !== finished) return@withLock
-            // A failure here is almost never about the text - no model, no
-            // voice, no network - so the rest of the queue would fail the same
-            // way. Four more reads that each say nothing but the same error is
-            // not a service to anyone.
-            if (_state.value is State.Failed) {
-                queue.clear()
-                return@withLock
+            if (job === finished) {
+                // A failure here is almost never about the text - no model, no
+                // voice, no network - so the rest of the queue would fail the
+                // same way. Four more reads that each say nothing but the same
+                // error is not a service to anyone.
+                if (_state.value is State.Failed) {
+                    queue.clear()
+                } else {
+                    job = null
+                    advanceLocked()
+                }
             }
-            job = null
-            advanceLocked()
+            refreshLocked()
         }
     }
 
@@ -474,23 +588,26 @@ object Reader {
      */
     fun skip(delta: Int) {
         if (delta == 0) return
-        scope.launch {
-            control.withLock {
-                val current = utterance ?: return@withLock
-                val target = chunkIndex + delta
-                if (target >= current.chunks.size) {
-                    stopLocked(ending = State.Finished(current.id, current.source))
-                    // Skipping off the end is an ending like any other, and
-                    // what was queued behind it is still wanted. The cancel
-                    // inside stopLocked means the completion handler will not
-                    // do this for us.
-                    advanceLocked()
-                    return@withLock
-                }
-                stopLocked(ending = null)
-                val from = target.coerceAtLeast(0)
-                job = scope.launch { play(current, from) }
+        // Through request, so the reader stays busy across the moment between
+        // stopping the old chunk and launching the new one. Without the hold
+        // the count passed through zero there, and the playback service
+        // stopped under a read that was only skipping.
+        request { stopped ->
+            if (stopped) return@request
+            val current = utterance ?: return@request
+            val target = chunkIndex + delta
+            if (target >= current.chunks.size) {
+                stopLocked(ending = State.Finished(current.id, current.source))
+                // Skipping off the end is an ending like any other, and
+                // what was queued behind it is still wanted. The cancel
+                // inside stopLocked means the completion handler will not
+                // do this for us.
+                advanceLocked()
+                return@request
             }
+            stopLocked(ending = null)
+            val from = target.coerceAtLeast(0)
+            launchLocked { play(current, from) }
         }
     }
 
@@ -823,12 +940,20 @@ object Reader {
     }
 
     fun stop() {
+        stoppedAt = order.incrementAndGet()
         scope.launch {
             control.withLock {
                 // Cleared before the early return: a stop with nothing playing
                 // still means "and nothing after it either".
                 queue.clear()
-                val source = currentSource ?: return@withLock
+                val source = currentSource
+                // A read that already ended keeps its source until the next
+                // one starts. Stopping it again would publish a second ending
+                // for it.
+                if (source == null || job?.isActive != true) {
+                    refreshLocked()
+                    return@withLock
+                }
                 stopLocked(ending = State.Stopped(currentUtterance, source))
             }
         }
@@ -846,6 +971,7 @@ object Reader {
         player?.stop()
         job?.cancelAndJoin()
         job = null
+        refreshLocked()
         if (ending != null) {
             utterance = null
             currentSource = null

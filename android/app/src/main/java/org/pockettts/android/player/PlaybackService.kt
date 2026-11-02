@@ -1,26 +1,17 @@
 package org.pockettts.android.player
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.drawable.Icon
 import android.os.IBinder
 import android.util.Log
-import androidx.annotation.VisibleForTesting
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import org.pockettts.android.R
 import org.pockettts.android.debug.Metrics
-import org.pockettts.android.ui.MainActivity
 
 /**
  * Keeps reading alive once the user leaves the app.
@@ -29,39 +20,19 @@ import org.pockettts.android.ui.MainActivity
  * activity; dismissing it should not cut the voice off mid-sentence. A
  * foreground service is what buys the process the right to keep producing audio
  * after its last activity is gone.
+ *
+ * That is all it does. The notification, the media session and audio focus
+ * belong to [NowPlaying], which holds them whether or not the system let this
+ * service start, and this service goes foreground under the same notification.
  */
 class PlaybackService : Service() {
 
-    private val scope = CoroutineScope(Dispatchers.Main.immediate)
+    // Not immediate: a service started with nothing to read stops on the next
+    // turn of the looper, not one line after it went foreground.
+    private val scope = CoroutineScope(Dispatchers.Main)
     private var watcher: Job? = null
 
-    /**
-     * Held for as long as this service is playing.
-     *
-     * The service already owns "reading is allowed to continue"; the right to
-     * be heard while doing it belongs in the same place, and is given back in
-     * onDestroy along with everything else.
-     */
-    private val focus by lazy { AudioFocus(this) }
-
-    /**
-     * The read as the rest of the system sees it.
-     *
-     * Created here rather than in the reader because a media session is a claim
-     * on the device's transport controls, and the thing entitled to make that
-     * claim is the same thing that claimed the right to keep playing: this
-     * service, for exactly as long as it lives.
-     */
-    private lateinit var transport: Transport
-
     override fun onBind(intent: Intent?): IBinder? = null
-
-    override fun onCreate() {
-        super.onCreate()
-        createChannel()
-        transport = Transport(this)
-        transport.update(Reader.state.value)
-    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -78,13 +49,13 @@ class PlaybackService : Service() {
         // Going foreground is allowed to fail: the system refuses it outright
         // when the app is judged to be in the background, and the exception is
         // thrown straight out of onStartCommand where nothing catches it. Losing
-        // the notification means reading stops when the app is swapped away,
-        // which is a far better outcome than taking the process down mid-word.
+        // the protection means reading stops if the process is reclaimed, which
+        // is a far better outcome than taking the process down mid-word.
         val foreground = runCatching {
             ServiceCompat.startForeground(
                 this,
-                NOTIFICATION_ID,
-                buildNotification(paused = false, audible = false),
+                NowPlaying.NOTIFICATION_ID,
+                NowPlaying.foregroundNotification(),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
             )
         }
@@ -94,50 +65,15 @@ class PlaybackService : Service() {
             return START_NOT_STICKY
         }
 
-        // Refused during a call, say. Reading over it is what this exists to
-        // prevent, so the read stops, and the service with it.
-        if (!focus.request()) {
-            Log.i(TAG, "Audio focus refused; stopping the read")
-            Reader.stop()
-        }
-
+        // Busy, not the state: between two queued reads the state is the
+        // first one's ending, and just after a speak it can still be the
+        // previous read's. Either made this service stop under a read that
+        // was still to come. Idle before reading begins is covered too: the
+        // read is counted as soon as it is asked for, which is before this
+        // service is started.
         if (watcher == null) {
             watcher = scope.launch {
-                Reader.state.collectLatest { state ->
-                    transport.update(state)
-                    when (state) {
-                        is Reader.State.Speaking -> {
-                            notificationManager.cancel(FAILURE_NOTIFICATION_ID)
-                            notificationManager.notify(
-                                NOTIFICATION_ID,
-                                buildNotification(state.paused, audible = state.audible),
-                            )
-                        }
-
-                        // A new read makes the last one's failure old news.
-                        is Reader.State.Preparing -> {
-                            notificationManager.cancel(FAILURE_NOTIFICATION_ID)
-                            notificationManager.notify(
-                                NOTIFICATION_ID,
-                                buildNotification(paused = false, audible = false),
-                            )
-                        }
-
-                        // Said where it outlasts the service: the read may have
-                        // no window (an agent's broadcast, a dismissed popup),
-                        // and the media notification goes with the service.
-                        is Reader.State.Failed -> {
-                            notifyFailure(state)
-                            stopSelf()
-                        }
-
-                        // Idle means the reader has not started yet - the
-                        // service is deliberately started first, so that the
-                        // process is already protected when synthesis begins.
-                        // Only an utterance that actually ended means stop.
-                        else -> if (state.isTerminal) stopSelf()
-                    }
-                }
+                Reader.busy.collect { busy -> if (!busy) stopSelf() }
             }
         }
         return START_NOT_STICKY
@@ -146,137 +82,11 @@ class PlaybackService : Service() {
     override fun onDestroy() {
         watcher?.cancel()
         watcher = null
-        focus.release()
-        transport.release()
         super.onDestroy()
     }
 
-    private val notificationManager: NotificationManager
-        get() = getSystemService(NotificationManager::class.java)
-
-    private fun createChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            getString(R.string.playback_channel),
-            NotificationManager.IMPORTANCE_LOW,
-        )
-        channel.setShowBadge(false)
-        notificationManager.createNotificationChannel(channel)
-        notificationManager.createNotificationChannel(
-            NotificationChannel(
-                FAILURE_CHANNEL_ID,
-                getString(R.string.failure_channel),
-                NotificationManager.IMPORTANCE_DEFAULT,
-            ),
-        )
-    }
-
-    /** A read that failed, as a notification that stays until it is dismissed. */
-    private fun notifyFailure(state: Reader.State.Failed) {
-        val notification = Notification.Builder(this, FAILURE_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(getString(R.string.read_failed))
-            .setContentText(state.message)
-            .setStyle(Notification.BigTextStyle().bigText(state.message))
-            .setCategory(Notification.CATEGORY_ERROR)
-            .setAutoCancel(true)
-            .setContentIntent(
-                PendingIntent.getActivity(
-                    this,
-                    0,
-                    Intent(this, MainActivity::class.java),
-                    PendingIntent.FLAG_IMMUTABLE,
-                ),
-            )
-            .build()
-        notificationManager.notify(FAILURE_NOTIFICATION_ID, notification)
-    }
-
-    /**
-     * The read, as a media notification.
-     *
-     * A media notification rather than an ordinary one because of what it buys:
-     * the same controls appear in the lock screen and in the quick-settings
-     * player, where they can be reached without unlocking the phone. That
-     * placement is the whole point of a listening app, and it is granted only
-     * to a notification that names an active session.
-     *
-     * The framework builder rather than NotificationCompat because MediaStyle
-     * lives in a support library this app does not depend on, and everything
-     * used here has been in the platform since well before minSdk.
-     */
-    private fun buildNotification(paused: Boolean, audible: Boolean): Notification =
-        Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(
-                getString(if (audible) R.string.reading_aloud else R.string.composing),
-            )
-            .setContentText(Reader.speakableText.take(NOTIFICATION_PREVIEW_CHARS))
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setCategory(Notification.CATEGORY_TRANSPORT)
-            .setVisibility(Notification.VISIBILITY_PUBLIC)
-            .setContentIntent(
-                PendingIntent.getActivity(
-                    this,
-                    0,
-                    Intent(this, MainActivity::class.java),
-                    PendingIntent.FLAG_IMMUTABLE,
-                ),
-            )
-            // Back and forward first, so the two most-used controls sit where
-            // a media notification puts them.
-            .addAction(action(R.drawable.ic_skip_previous, R.string.skip_back, ACTION_SKIP_BACK))
-            .addAction(
-                action(
-                    if (paused) R.drawable.ic_play else R.drawable.ic_pause,
-                    if (paused) R.string.resume else R.string.pause,
-                    ACTION_TOGGLE_PAUSE,
-                ),
-            )
-            .addAction(action(R.drawable.ic_skip_next, R.string.skip_forward, ACTION_SKIP_FORWARD))
-            .addAction(action(R.drawable.ic_stop, R.string.stop, ACTION_STOP))
-            .setStyle(
-                Notification.MediaStyle()
-                    .setMediaSession(transport.token)
-                    // The collapsed notification has room for three, and Stop
-                    // has to be one of them. It used to be the one dropped, on
-                    // the theory that swiping the notification away already
-                    // stopped the read - but a media notification for a read
-                    // in progress cannot be swiped away, and on the device the
-                    // broadcast path was tested on there was no way to end a
-                    // read from the shade at all. Forward is the one to drop:
-                    // it is the control that ends a read by accident, and it
-                    // is still there once the notification is expanded. On
-                    // Android 13 and later the system draws the session's
-                    // actions instead, and Transport makes the same choice.
-                    .setShowActionsInCompactView(0, 1, 3),
-            )
-            .build()
-
-    private fun action(icon: Int, title: Int, action: String): Notification.Action =
-        Notification.Action.Builder(
-            Icon.createWithResource(this, icon),
-            getString(title),
-            command(action),
-        ).build()
-
-    private fun command(action: String): PendingIntent =
-        PendingIntent.getService(
-            this,
-            action.hashCode(),
-            Intent(this, PlaybackService::class.java).setAction(action),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-
     companion object {
         private const val TAG = "PlaybackService"
-        private const val CHANNEL_ID = "playback"
-        private const val NOTIFICATION_ID = 1
-        private const val FAILURE_CHANNEL_ID = "failures"
-        @VisibleForTesting
-        internal const val FAILURE_NOTIFICATION_ID = 2
-        private const val NOTIFICATION_PREVIEW_CHARS = 200
 
         const val ACTION_TOGGLE_PAUSE = "org.pockettts.android.TOGGLE_PAUSE"
         const val ACTION_SKIP_BACK = "org.pockettts.android.SKIP_BACK"
@@ -290,9 +100,10 @@ class PlaybackService : Service() {
          * outright, and a read asked for over
          * [SpeakReceiver][org.pockettts.android.SpeakReceiver] begins there by
          * design - phone in a pocket, screen off. The refusal costs the read
-         * its protection from being swapped away and its notification; it does
-         * not stop the reader, which is already running. Taking the caller down
-         * over it would.
+         * its protection from the process being reclaimed. The notification
+         * and the controls are [NowPlaying]'s and stay. It does not stop the
+         * reader, which is already running. Taking the caller down over it
+         * would.
          */
         fun start(context: Context) {
             runCatching {
@@ -302,11 +113,11 @@ class PlaybackService : Service() {
             }.onFailure {
                 Log.w(TAG, "Could not start playback; reading continues unprotected", it)
                 // Recorded where it can be read. A phone has no logcat within
-                // reach, so a read that played with no controls and no
-                // notification looked like a missing feature; it is a refused
-                // background start, and the exception names it.
+                // reach, and a read that is cut off when the process is
+                // reclaimed looks like a crash; it is a refused background
+                // start, and the exception names it.
                 Metrics.playbackProtection =
-                    "refused (${it.javaClass.simpleName}) - no controls or notification; " +
+                    "refused (${it.javaClass.simpleName}) - a long read may be cut off in the background; " +
                         "allow background activity for Pocket TTS in battery settings"
             }
         }
