@@ -53,6 +53,7 @@ class Transport(private val context: Context) {
         override fun onSkipToNext() { Reader.skipForward() }
         override fun onSkipToPrevious() { Reader.skipBack() }
         override fun onStop() { Reader.stop() }
+        override fun onSeekTo(pos: Long) { Reader.seekTo(pos) }
 
         // The system player draws standard actions it has a button for, and
         // ACTION_STOP is not one of them - so a read started from the broadcast
@@ -64,6 +65,8 @@ class Transport(private val context: Context) {
             when (action) {
                 ACTION_STOP -> Reader.stop()
                 ACTION_SKIP_FORWARD -> Reader.skipForward()
+                ACTION_NEXT_ITEM -> Reader.next()
+                ACTION_SPEED -> Reader.cycleSpeed(context)
             }
         }
 
@@ -89,17 +92,20 @@ class Transport(private val context: Context) {
     }
 
     /** Mirrors [state] into the session, so the system controls match the app. */
-    fun update(state: Reader.State) {
+    fun update(state: Reader.State, progress: Reader.Progress?, queued: Int, speed: Float) {
         session.setMetadata(
             MediaMetadata.Builder()
                 .putString(MediaMetadata.METADATA_KEY_TITLE, titleOf(Reader.speakableText))
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, settings.voice().displayName)
-                // No duration. The length of a read is not known until it has
-                // been synthesised, and a made-up one would be drawn as a
-                // progress bar and a clock that both lie.
+                // An estimate: the length of a read is not known until it has
+                // been composed. It comes from the speaking rate measured so
+                // far, so it settles within the first sentence or two, and a
+                // seek uses the same estimate to find its sentence. Without a
+                // duration the system draws no seek bar at all.
+                .apply { progress?.let { putLong(MediaMetadata.METADATA_KEY_DURATION, it.durationMillis) } }
                 .build(),
         )
-        session.setPlaybackState(playbackState(context, state))
+        session.setPlaybackState(playbackState(context, state, progress, queued, speed))
     }
 
     fun release() {
@@ -115,6 +121,12 @@ class Transport(private val context: Context) {
 
         /** The custom action id for skipping forward; see [ACTIONS]. */
         const val ACTION_SKIP_FORWARD = "org.pockettts.android.transport.SKIP_FORWARD"
+
+        /** Ends this read for the next queued one; offered only while one is queued. */
+        const val ACTION_NEXT_ITEM = "org.pockettts.android.transport.NEXT_ITEM"
+
+        /** Steps the reading speed; see [Reader.cycleSpeed]. */
+        const val ACTION_SPEED = "org.pockettts.android.transport.SPEED"
 
         /** How much of the text the system player shows as the title. */
         private const val TITLE_CHARS = 80
@@ -146,7 +158,8 @@ class Transport(private val context: Context) {
             PlaybackState.ACTION_PAUSE or
             PlaybackState.ACTION_PLAY_PAUSE or
             PlaybackState.ACTION_SKIP_TO_PREVIOUS or
-            PlaybackState.ACTION_STOP
+            PlaybackState.ACTION_STOP or
+            PlaybackState.ACTION_SEEK_TO
 
         /**
          * What the reader is doing, in the vocabulary the system understands.
@@ -168,28 +181,51 @@ class Transport(private val context: Context) {
          * shade.
          */
         @VisibleForTesting
-        fun playbackState(context: Context, state: Reader.State): PlaybackState =
-            PlaybackState.Builder()
+        fun playbackState(
+            context: Context,
+            state: Reader.State,
+            progress: Reader.Progress? = null,
+            queued: Int = 0,
+            speed: Float = 1f,
+        ): PlaybackState {
+            val playing = playbackStateOf(state)
+            return PlaybackState.Builder()
                 .setActions(ACTIONS)
-                // Order matters: the first custom action takes the collapsed
-                // slot that ACTION_SKIP_TO_NEXT leaves free. See [ACTIONS].
+                // Order matters. The first custom action takes the collapsed
+                // slot that ACTION_SKIP_TO_NEXT leaves free (see [ACTIONS]),
+                // and the expanded player has room for two more after it. So
+                // Next item, while there is one, pushes Speed off the system
+                // player; the speed is still on the app's main screen.
+                .addCustomAction(customAction(ACTION_STOP, context.getString(R.string.stop), R.drawable.ic_stop))
                 .addCustomAction(
-                    PlaybackState.CustomAction.Builder(
-                        ACTION_STOP,
-                        context.getString(R.string.stop),
-                        R.drawable.ic_stop,
-                    ).build(),
+                    customAction(ACTION_SKIP_FORWARD, context.getString(R.string.skip_forward), R.drawable.ic_skip_next),
                 )
-                .addCustomAction(
-                    PlaybackState.CustomAction.Builder(
-                        ACTION_SKIP_FORWARD,
-                        context.getString(R.string.skip_forward),
-                        R.drawable.ic_skip_next,
-                    ).build(),
+                .apply {
+                    if (queued > 0) {
+                        addCustomAction(
+                            customAction(ACTION_NEXT_ITEM, context.getString(R.string.next_item), R.drawable.ic_next_item),
+                        )
+                    }
+                }
+                .addCustomAction(customAction(ACTION_SPEED, speedLabel(context, speed), R.drawable.ic_speed))
+                // The system moves the bar on from this position by itself
+                // while the state is playing, at the rate given: real time, as
+                // the estimate is in real milliseconds whatever the speed.
+                .setState(
+                    playing,
+                    progress?.positionMillis ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                    if (playing == PlaybackState.STATE_PLAYING) 1f else 0f,
                 )
-                .setState(playbackStateOf(state), PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
                 .apply { if (state is Reader.State.Failed) setErrorMessage(state.message) }
                 .build()
+        }
+
+        private fun customAction(action: String, name: String, icon: Int) =
+            PlaybackState.CustomAction.Builder(action, name, icon).build()
+
+        /** "Speed 1.25×": the control names what it is set to, since one tap changes it. */
+        fun speedLabel(context: Context, speed: Float): String =
+            context.getString(R.string.speed_control, java.text.DecimalFormat("0.##").format(speed))
 
         /** The key a media-button intent carries, if it carries one. */
         @VisibleForTesting

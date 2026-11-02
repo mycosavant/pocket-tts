@@ -160,9 +160,19 @@ The queue is careful about whose it is. A `speak` that replaces the current read
 
 `player/SpeechEngine` and `player/AudioSink` exist so the reader can be tested. Before them, driving the reader meant loading a 98 MB model and an `AudioTrack`. That is why the part that had actually been wrong had no tests, and why `ActivityLaunchTest` reached `ensureModel` and quietly downloaded the model on every run of the unit suite.
 
-Skipping is built on the same seam. An utterance keeps its chunks, its engine and its loaded voice, so skipping back costs re-composing one chunk and nothing else: no re-selection, no reload. Skipping back from the first chunk replays it. Skipping forward past the last chunk ends the read, which is what someone who keeps tapping forward means by it, and it starts the next queued read if there is one.
+Skipping is built on the same seam. An utterance keeps its chunks, its engine and its loaded voice, so skipping costs re-composing from where it lands and nothing else: no re-selection, no reload. Skipping forward past the last sentence ends the read, which is what someone who keeps tapping forward means by it, and it starts the next queued read if there is one.
 
-A chunk is the unit of skipping, and a chunk is not a sentence. It is a paragraph, or up to a few hundred characters of one, cut at sentence ends. The controls used to be labelled "a sentence". On a short reply (one paragraph, one chunk), a tap forward near its second sentence ended the read, which looks like the wrong button doing stop's job. The labels now say what the buttons do. A skip finer than a chunk would need the engine to return audio sentence by sentence, and the engine composes a chunk as a whole.
+A skip moves by sentence (`TextChunker.sentenceStarts`). It used to move by chunk, and a chunk can hold several sentences: up to 160 characters when chunks continue each other, and up to 400 when they do not. A skip that lands inside a chunk keeps the chunks before it and chunks the text again from that sentence, so the sentence becomes the start of a chunk. Back works the way a music player does: more than two seconds into a sentence it restarts that sentence, and before that it goes to the one before.
+
+Where the listener is inside a chunk is an estimate. The model composes a chunk whole and does not say where its sentences fall in the audio, so the reader counts the samples of the current chunk written so far and converts them to characters at the speaking rate measured over every chunk heard (`Reader.progress`). The same rate gives the media session a duration and a position, so the system draws a seek bar, and a seek is turned back into a sentence with the same rate. The times on that bar are estimates that settle after the first sentence or two. Before the first chunk the rate is a guess of 15 characters a second.
+
+## The rest of the controls
+
+- **Progress.** The notification's subtext says "Sentence 3 of 12", and its text is the chunk being heard rather than the start of the passage.
+- **Queue.** While reads are queued behind this one, the subtext says how many, and a Next item control ends this read and starts the next (`Reader.next`).
+- **Speed.** A control steps through 0.8×, 1×, 1.25× and 1.5×, and says which one it is on. It sets the same speed as the slider on the main screen, and both now change a read in progress as well as later ones. The new speed is heard from the next chunk composed, which is the one after the current chunk, or the one after that if it is already composed.
+
+From Android 13 the system player has room for Stop and two more custom actions once expanded. Forward is the first of the two. The second is Next item while something is queued and Speed otherwise. Before Android 13 the notification's fifth action makes the same choice.
 
 `GlassPanelViewTest` asserts the two things that were missing when the sliders went dead: where the panel thinks it is relative to its backdrop, and what colour it actually put on the canvas. Its predecessor asserted only that drawing did not throw. Robolectric's software canvas made the panel bail out before it reached the geometry, so the broken function was never called by any test.
 

@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import org.pockettts.android.R
@@ -46,6 +47,7 @@ object NowPlaying {
     private const val CHANNEL_ID = "playback"
     private const val FAILURE_CHANNEL_ID = "failures"
     private const val NOTIFICATION_PREVIEW_CHARS = 200
+    private const val TICK_MILLIS = 1000L
 
     /** Shared with [PlaybackService], which runs in the foreground under it. */
     const val NOTIFICATION_ID = 1
@@ -57,6 +59,11 @@ object NowPlaying {
 
     private lateinit var app: Context
     private var following: Job? = null
+    private var ticking: Job? = null
+
+    /** What [follow] last showed, for the ticker to show again with a fresher position. */
+    private var shown: Snapshot? = null
+    private var shownSentence = 0
     private var transport: Transport? = null
     private var focus: AudioFocus? = null
 
@@ -75,22 +82,34 @@ object NowPlaying {
         val application = context.applicationContext
         if (::app.isInitialized && app === application) return
         following?.cancel()
+        ticking?.cancel()
+        ticking = null
         transport = null
         focus = null
         app = application
         createChannels()
         following = scope.launch {
-            combine(Reader.state, Reader.busy) { state, busy -> state to busy }
-                .collect { (state, busy) -> follow(state, busy) }
+            combine(Reader.state, Reader.busy, Reader.queuedCount, Reader.speed, ::Snapshot)
+                .collect { follow(it) }
         }
     }
 
-    private fun follow(state: Reader.State, busy: Boolean) {
-        if (busy) begin() else end()
+    /** Everything the controls show, as one value. */
+    private data class Snapshot(val state: Reader.State, val busy: Boolean, val queued: Int, val speed: Float)
+
+    private fun follow(snapshot: Snapshot) {
+        val state = snapshot.state
+        if (snapshot.busy) begin() else end()
+        shown = snapshot
         val transport = transport
         if (transport != null) {
-            transport.update(state)
-            notificationManager.notify(NOTIFICATION_ID, notification(state))
+            val progress = Reader.progress()
+            shownSentence = progress?.sentence ?: 0
+            transport.update(state, progress, snapshot.queued, snapshot.speed)
+            notificationManager.notify(
+                NOTIFICATION_ID,
+                notification(state, progress, snapshot.queued, snapshot.speed),
+            )
         }
         when (state) {
             // A new read makes the last one's failure old news.
@@ -110,6 +129,19 @@ object NowPlaying {
     private fun begin() {
         if (transport != null) return
         transport = Transport(app)
+        // The state changes when the writer reaches a new chunk, which is
+        // ahead of the listener by whatever the output buffers. So the
+        // sentence the listener crosses into is checked for here, and the
+        // controls redrawn only when it has changed.
+        ticking = scope.launch {
+            while (true) {
+                delay(TICK_MILLIS)
+                val snapshot = shown ?: continue
+                if (snapshot.state is Reader.State.Speaking && Reader.progress()?.sentence != shownSentence) {
+                    follow(snapshot)
+                }
+            }
+        }
         // Asked once per stretch of reading, so a queued read does not ask
         // again, and the next read after a refusal does. Refused during a
         // call, reading over it is what focus exists to prevent, so the read
@@ -130,6 +162,8 @@ object NowPlaying {
     private fun end() {
         val transport = transport ?: return
         this.transport = null
+        ticking?.cancel()
+        ticking = null
         focus?.release()
         focus = null
         transport.release()
@@ -143,7 +177,7 @@ object NowPlaying {
      */
     fun foregroundNotification(): Notification {
         if (Reader.isBusy) begin()
-        return notification(Reader.state.value)
+        return notification(Reader.state.value, Reader.progress(), Reader.queuedCount.value, Reader.speed.value)
     }
 
     private val notificationManager: NotificationManager
@@ -198,7 +232,12 @@ object NowPlaying {
      * background, so a read whose service was refused at the start gets one
      * the first time its notification is used.
      */
-    private fun notification(state: Reader.State): Notification {
+    private fun notification(
+        state: Reader.State,
+        progress: Reader.Progress?,
+        queued: Int,
+        speed: Float,
+    ): Notification {
         val speaking = state as? Reader.State.Speaking
         val paused = speaking?.paused == true
         val audible = speaking?.audible == true
@@ -220,7 +259,10 @@ object NowPlaying {
             .setContentTitle(
                 app.getString(if (audible) R.string.reading_aloud else R.string.composing),
             )
-            .setContentText(Reader.speakableText.take(NOTIFICATION_PREVIEW_CHARS))
+            // The sentence being heard rather than the start of the passage,
+            // which said nothing about where the read had got to.
+            .setContentText(currentText(speaking, progress))
+            .setSubText(subText(progress, queued))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_TRANSPORT)
@@ -238,6 +280,16 @@ object NowPlaying {
             )
             .addAction(action(R.drawable.ic_skip_next, R.string.skip_forward, PlaybackService.ACTION_SKIP_FORWARD))
             .addAction(action(R.drawable.ic_stop, R.string.stop, PlaybackService.ACTION_STOP))
+            // Room for one more before Android 13, where these are what is
+            // drawn: the queue's control while there is a queue, and the
+            // speed otherwise. Transport makes the same choice.
+            .addAction(
+                if (queued > 0) {
+                    action(R.drawable.ic_next_item, app.getString(R.string.next_item), PlaybackService.ACTION_NEXT_ITEM)
+                } else {
+                    action(R.drawable.ic_speed, Transport.speedLabel(app, speed), PlaybackService.ACTION_CYCLE_SPEED)
+                },
+            )
             .setStyle(style)
             .build()
     }
@@ -245,10 +297,33 @@ object NowPlaying {
     private fun openApp(): PendingIntent =
         PendingIntent.getActivity(app, 0, Intent(app, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
 
+    /** The text of the chunk being heard, or the start of the passage before one is. */
+    private fun currentText(speaking: Reader.State.Speaking?, progress: Reader.Progress?): String {
+        val text = Reader.speakableText
+        if (speaking != null && progress != null) {
+            val start = progress.heardStart
+            val end = progress.heardEnd
+            if (start in 0..end && end <= text.length) {
+                text.substring(start, end).trim().takeIf { it.isNotEmpty() }?.let { return it }
+            }
+        }
+        return text.take(NOTIFICATION_PREVIEW_CHARS)
+    }
+
+    /** "Sentence 3 of 12 · 2 more queued", or whichever half there is. */
+    private fun subText(progress: Reader.Progress?, queued: Int): String? =
+        listOfNotNull(
+            progress?.takeIf { it.sentences > 1 }?.let { app.getString(R.string.sentence_of, it.sentence, it.sentences) },
+            queued.takeIf { it > 0 }?.let { app.resources.getQuantityString(R.plurals.queued_reads, it, it) },
+        ).joinToString(" · ").ifEmpty { null }
+
     private fun action(icon: Int, title: Int, action: String): Notification.Action =
+        action(icon, app.getString(title), action)
+
+    private fun action(icon: Int, title: String, action: String): Notification.Action =
         Notification.Action.Builder(
             Icon.createWithResource(app, icon),
-            app.getString(title),
+            title,
             PendingIntent.getService(
                 app,
                 action.hashCode(),

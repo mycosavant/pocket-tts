@@ -28,6 +28,7 @@ import org.pockettts.android.engine.ModelInstall
 import org.pockettts.android.engine.ModelManager
 import org.pockettts.android.engine.Settings
 import org.pockettts.android.engine.VoiceCatalog
+import org.pockettts.android.player.Reader
 
 class MainActivity : AppCompatActivity() {
 
@@ -109,7 +110,9 @@ class MainActivity : AppCompatActivity() {
 
         binding.speedSlider.addOnChangeListener { _, value, fromUser ->
             if (fromUser) {
-                settings.speed = value
+                // Through the reader, so a read in progress changes pace too,
+                // as it does from the notification's speed control.
+                Reader.setSpeed(this, value)
                 binding.speedLabel.text = getString(R.string.speed, value)
             }
         }

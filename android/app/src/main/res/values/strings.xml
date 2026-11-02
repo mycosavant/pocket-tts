@@ -74,6 +74,13 @@
 
     <string name="skip_back">Skip back</string>
     <string name="skip_forward">Skip forward</string>
+    <string name="next_item">Next item</string>
+    <string name="speed_control">Speed %1$s×</string>
+    <string name="sentence_of">Sentence %1$d of %2$d</string>
+    <plurals name="queued_reads">
+        <item quantity="one">%d more queued</item>
+        <item quantity="other">%d more queued</item>
+    </plurals>
 
     <string name="play_sample">Play a sample of this voice</string>
     <string name="stop_sample">Stop the sample</string>

@@ -119,6 +119,9 @@ class StreamingPlayer(private val sampleRate: Int) : AudioSink {
 
     private var writtenFrames: Long = 0
 
+    override val playedFrames: Long
+        get() = track?.let { runCatching { it.playbackHeadPosition.toLong() and 0xFFFFFFFFL }.getOrNull() } ?: -1
+
     override fun stop() {
         if (!stopped.compareAndSet(false, true)) return
         resume()
