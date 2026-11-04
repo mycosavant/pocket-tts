@@ -153,7 +153,7 @@ class ReaderTest {
         val first = Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Scratchpad)
         awaitFor(first, "speaking") { it is Reader.State.Speaking }
 
-        val seen = mutableListOf<Reader.State>()
+        val seen = java.util.Collections.synchronizedList(mutableListOf<Reader.State>())
         val watcher = CoroutineScope(Dispatchers.Unconfined).launch {
             Reader.state.collect { seen += it }
         }
@@ -165,13 +165,14 @@ class ReaderTest {
         awaitFor(second, "started") { true }
         engine.gate?.complete(Unit)
         awaitFor(second, "finished") { it is Reader.State.Finished }
+        awaitSeen(seen, second)
         watcher.cancel()
 
         // One terminal state, at the very end, belonging to the second read.
         // The handover contributes none.
         assertEquals(
             listOf(Reader.State.Finished(second, Reader.Source.Scratchpad)),
-            seen.filter { it.isTerminal },
+            synchronized(seen) { seen.filter { it.isTerminal } },
         )
     }
 
@@ -293,6 +294,12 @@ class ReaderTest {
 
         Reader.skipBack()
         Reader.skipForward()
+        // Both skips handled while the read is still loading, which leaves
+        // the read's own hold and nothing else. Releasing the load before
+        // then let the skips land on the loaded read instead, where a skip
+        // forward rightly finishes it before a word is composed.
+        awaitUntil("the skips were handled") { Reader.holdCount == 1 }
+        assertTrue("a skip moved the read on", Reader.state.value.let { it is Reader.State.Preparing && it.utterance == next })
         engines.loading?.complete(Unit)
         awaitFor(next, "finished") { it is Reader.State.Finished }
         assertEquals("The next read.", engine.spoken.last())
@@ -436,7 +443,7 @@ class ReaderTest {
         // Asserted over the sequence of states, collected unconfined. Waiting
         // for the audible one instead would be a race: once the fake engine is
         // ungated it runs to the end in microseconds, and StateFlow conflates.
-        val seen = mutableListOf<Reader.State>()
+        val seen = java.util.Collections.synchronizedList(mutableListOf<Reader.State>())
         val watcher = CoroutineScope(Dispatchers.Unconfined).launch {
             Reader.state.collect { seen += it }
         }
@@ -451,9 +458,11 @@ class ReaderTest {
 
         engine.gate?.complete(Unit)
         awaitFor(id, "finished") { it is Reader.State.Finished }
+        awaitSeen(seen, id)
         watcher.cancel()
 
-        val speaking = seen.filterIsInstance<Reader.State.Speaking>().filter { it.utterance == id }
+        val speaking = synchronized(seen) { seen.toList() }
+            .filterIsInstance<Reader.State.Speaking>().filter { it.utterance == id }
         assertFalse("the first spoken state claimed to be audible", speaking.first().audible)
         assertTrue("never became audible", speaking.any { it.audible })
     }
@@ -735,6 +744,19 @@ class ReaderTest {
             fail("never became true: $what")
         }
     }
+
+    /**
+     * Waits for a watcher collecting into [seen] to reach [utterance]'s ending.
+     *
+     * The watcher is unconfined, so after its first suspension it runs on
+     * whichever thread published the state: the reader's, not this one. The
+     * test seeing the ending first and cancelling it then dropped the ending
+     * from [seen], and the assertion on it failed now and then.
+     */
+    private suspend fun awaitSeen(seen: List<Reader.State>, utterance: Long) =
+        awaitUntil("the watcher saw utterance $utterance end") {
+            synchronized(seen) { seen.any { it.utterance == utterance && it.isTerminal } }
+        }
 
     private companion object {
         const val TIMEOUT_MS = 10_000L

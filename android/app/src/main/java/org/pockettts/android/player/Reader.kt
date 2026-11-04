@@ -251,6 +251,14 @@ object Reader {
     /** [busy], now. */
     val isBusy: Boolean get() = holds.value > 0
 
+    /**
+     * [holds], for a test that has to know its requests have been handled:
+     * a skip returns before it has taken [control], and a test that moves on
+     * at once is testing whichever of the two got there first.
+     */
+    @VisibleForTesting
+    internal val holdCount: Int get() = holds.value
+
     /** Brings the playing-or-queued hold up to date. Caller holds [control]. */
     private fun refreshLocked() {
         _queuedCount.value = queue.size
