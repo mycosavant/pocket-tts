@@ -130,6 +130,36 @@ object TextChunker {
     fun chunk(speakable: String, continuing: Boolean): List<Chunk> =
         if (continuing) chunk(speakable, CONTINUING_TARGET, CONTINUING_MAX) else chunk(speakable)
 
+    /**
+     * Chunks for [speakable] from [from] on, with offsets into the whole of
+     * [speakable], for a read that skips to a sentence inside a chunk.
+     */
+    fun chunkFrom(speakable: String, from: Int, continuing: Boolean): List<Chunk> =
+        chunk(speakable.substring(from), continuing).map {
+            it.copy(start = it.start + from, end = it.end + from)
+        }
+
+    /**
+     * Where each sentence of [speakable] starts, in order: the first
+     * non-blank character after a sentence end or a paragraph break.
+     *
+     * The unit a skip moves by. A chunk can hold several sentences, up to 400
+     * characters when chunks do not continue each other, and a skip by chunk
+     * jumped over all of them.
+     */
+    fun sentenceStarts(speakable: String): List<Int> {
+        val starts = sortedSetOf<Int>()
+        fun addFrom(index: Int) {
+            var i = index
+            while (i < speakable.length && speakable[i].isWhitespace()) i++
+            if (i < speakable.length) starts += i
+        }
+        addFrom(0)
+        SENTENCE_END.findAll(speakable).forEach { addFrom(it.range.last + 1) }
+        Regex("""\n\s*\n""").findAll(speakable).forEach { addFrom(it.range.last + 1) }
+        return starts.toList()
+    }
+
     fun chunk(speakable: String, target: Int = TARGET, max: Int = MAX): List<Chunk> {
         val chunks = mutableListOf<Chunk>()
         var paragraphStart = 0

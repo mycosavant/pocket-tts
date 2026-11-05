@@ -42,6 +42,12 @@ class FakeEngine(
     /** Completed by the test to let a synthesis call finish, when it wants control. */
     var gate: CompletableDeferred<Unit>? = null
 
+    /** Seconds of audio each chunk comes out as, whatever its length. */
+    var audioSeconds = 0.1f
+
+    /** The speed each chunk was composed at, in order. */
+    val speeds = mutableListOf<Float>()
+
     override suspend fun useVoice(voiceId: String, caller: String) {
         this.voiceId = voiceId
         this.caller = caller
@@ -62,10 +68,11 @@ class FakeEngine(
         delay(WORK_MILLIS)
         check(!(read is FakeRead && read.closed)) { "synthesised into a closed read" }
         spoken += text
+        speeds += speed
         readOf += read as? FakeRead
         if (text == failOn) throw IllegalStateException("synthesis exploded")
         gate?.await()
-        return onAudio(FloatArray(sampleRate / 10))
+        return onAudio(FloatArray((sampleRate * audioSeconds).toInt()))
     }
 
     private companion object {
@@ -76,11 +83,15 @@ class FakeEngine(
         var created = 0
             private set
 
+        /** Completed by the test to let [create] return, to hold a read in Preparing. */
+        var loading: CompletableDeferred<Unit>? = null
+
         override suspend fun create(
             context: Context,
             progress: (Float) -> Unit,
         ): SpeechEngine {
             created++
+            loading?.await()
             return engine
         }
     }

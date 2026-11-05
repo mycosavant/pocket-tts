@@ -71,6 +71,26 @@ class TextChunkerTest {
         val rejoined = TextChunker.chunk(text).joinToString(" ") { it.text }
         assertEquals("One. Two. Three. Four. Five.", rejoined)
     }
+
+    @Test
+    fun `sentence starts fall after each sentence end and each paragraph break`() {
+        val text = "One thing. Two \"quoted.\" Three?\n\nNew paragraph with no stop\n\nLast."
+        val starts = TextChunker.sentenceStarts(text)
+        assertEquals(
+            listOf("One", "Two", "Three?", "New", "Last."),
+            starts.map { text.substring(it).split(" ", "\n").first() },
+        )
+    }
+
+    @Test
+    fun `chunking from a sentence keeps offsets into the whole text`() {
+        val text = "First sentence here. Second sentence here. Third one."
+        val from = text.indexOf("Second")
+        val chunks = TextChunker.chunkFrom(text, from, continuing = true)
+        assertEquals(from, chunks.first().start)
+        chunks.forEach { assertEquals(it.text, text.substring(it.start, it.end)) }
+        assertEquals(text.length, chunks.last().end)
+    }
 }
 
 class ShortTailTest {
@@ -133,4 +153,5 @@ class ShortTailTest {
         assertEquals("Done.", TextChunker.joinShortTail("Done."))
         assertEquals("", TextChunker.joinShortTail(""))
     }
+
 }

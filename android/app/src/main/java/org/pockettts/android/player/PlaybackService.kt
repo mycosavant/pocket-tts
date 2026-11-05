@@ -39,6 +39,8 @@ class PlaybackService : Service() {
             ACTION_TOGGLE_PAUSE -> Reader.togglePause()
             ACTION_SKIP_BACK -> Reader.skipBack()
             ACTION_SKIP_FORWARD -> Reader.skipForward()
+            ACTION_NEXT_ITEM -> Reader.next()
+            ACTION_CYCLE_SPEED -> Reader.cycleSpeed(this)
             ACTION_STOP -> {
                 Reader.stop()
                 stopSelf()
@@ -92,6 +94,8 @@ class PlaybackService : Service() {
         const val ACTION_SKIP_BACK = "org.pockettts.android.SKIP_BACK"
         const val ACTION_SKIP_FORWARD = "org.pockettts.android.SKIP_FORWARD"
         const val ACTION_STOP = "org.pockettts.android.STOP"
+        const val ACTION_NEXT_ITEM = "org.pockettts.android.NEXT_ITEM"
+        const val ACTION_CYCLE_SPEED = "org.pockettts.android.CYCLE_SPEED"
 
         /**
          * Starts the service, or carries on without it.

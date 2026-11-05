@@ -18,6 +18,14 @@ interface AudioSink {
      */
     val underruns: Int get() = 0
 
+    /**
+     * Frames the listener has heard so far, or -1 if the implementation
+     * cannot tell. Behind what has been written by whatever the output
+     * buffers, which is what puts a skip a sentence off if it is not
+     * accounted for.
+     */
+    val playedFrames: Long get() = -1
+
     fun start()
 
     /** @return false if playback was stopped and the caller should give up. */

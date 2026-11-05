@@ -153,7 +153,7 @@ class ReaderTest {
         val first = Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Scratchpad)
         awaitFor(first, "speaking") { it is Reader.State.Speaking }
 
-        val seen = mutableListOf<Reader.State>()
+        val seen = java.util.Collections.synchronizedList(mutableListOf<Reader.State>())
         val watcher = CoroutineScope(Dispatchers.Unconfined).launch {
             Reader.state.collect { seen += it }
         }
@@ -165,13 +165,14 @@ class ReaderTest {
         awaitFor(second, "started") { true }
         engine.gate?.complete(Unit)
         awaitFor(second, "finished") { it is Reader.State.Finished }
+        awaitSeen(seen, second)
         watcher.cancel()
 
         // One terminal state, at the very end, belonging to the second read.
         // The handover contributes none.
         assertEquals(
             listOf(Reader.State.Finished(second, Reader.Source.Scratchpad)),
-            seen.filter { it.isTerminal },
+            synchronized(seen) { seen.filter { it.isTerminal } },
         )
     }
 
@@ -239,16 +240,148 @@ class ReaderTest {
     }
 
     @Test
-    fun `skipping back replays the sentence just read`() = runBlocking {
+    fun `skipping back moves by sentence, not by chunk`() = runBlocking {
+        // The three sentences are one chunk. Skipping back used to replay the
+        // whole of it; now it goes to the sentence before the one just heard,
+        // which is under two seconds in, and chunks the text again from there.
         val id = readToEnd()
         val beforeSkip = engine.spoken.size
 
         Reader.skipBack()
         awaitUntil("the skipped sentence was re-read") { engine.spoken.size > beforeSkip }
         awaitFor(id, "finished after skip") { it is Reader.State.Finished }
-        // The last chunk again, and nothing before it re-synthesised.
         assertEquals(beforeSkip + 1, engine.spoken.size)
-        assertEquals(engine.spoken[beforeSkip - 1], engine.spoken.last())
+        assertEquals("Two second thing. Three third thing.", engine.spoken.last())
+    }
+
+    @Test
+    fun `skipping back well into a sentence restarts it`() = runBlocking {
+        // Ten seconds for 53 characters puts the start of "Three third
+        // thing." over three seconds before the end, so one tap means again.
+        engine.audioSeconds = 10f
+        val id = readToEnd()
+        val beforeSkip = engine.spoken.size
+
+        Reader.skipBack()
+        awaitUntil("the sentence was re-read") { engine.spoken.size > beforeSkip }
+        awaitFor(id, "finished after skip") { it is Reader.State.Finished }
+        assertEquals("Three third thing.", engine.spoken.last())
+    }
+
+    @Test
+    fun `two quick taps on back restart the sentence, then go to the one before`() = runBlocking {
+        engine.audioSeconds = 10f
+        val id = readToEnd()
+        val beforeSkip = engine.spoken.size
+
+        Reader.skipBack()
+        Reader.skipBack()
+        awaitUntil("the skip was read") { engine.spoken.size > beforeSkip }
+        awaitFor(id, "finished after the skips") { it is Reader.State.Finished }
+        assertEquals("Two second thing. Three third thing.", engine.spoken.last())
+    }
+
+    @Test
+    fun `a skip while the next read is preparing does not bring back the last one`() = runBlocking {
+        // The finished read stayed the reader's current one until the next
+        // had loaded, so a skip in that window replayed it and dropped the
+        // read that was asked for.
+        readToEnd()
+        engines.loading = CompletableDeferred()
+        val next = Reader.speak(context, "The next read.", treatAsMarkdown = false, source = Reader.Source.Selection)
+        awaitFor(next, "preparing") { it is Reader.State.Preparing }
+        assertNull("progress drawn from the last read", Reader.progress())
+
+        Reader.skipBack()
+        Reader.skipForward()
+        // Both skips handled while the read is still loading, which leaves
+        // the read's own hold and nothing else. Releasing the load before
+        // then let the skips land on the loaded read instead, where a skip
+        // forward rightly finishes it before a word is composed.
+        awaitUntil("the skips were handled") { Reader.holdCount == 1 }
+        assertTrue("a skip moved the read on", Reader.state.value.let { it is Reader.State.Preparing && it.utterance == next })
+        engines.loading?.complete(Unit)
+        awaitFor(next, "finished") { it is Reader.State.Finished }
+        assertEquals("The next read.", engine.spoken.last())
+    }
+
+    @Test
+    fun `a seek lands on the sentence the bar points into`() = runBlocking {
+        engine.audioSeconds = 10f
+        val id = readToEnd()
+        val millisPerChar = Reader.progress()!!.durationMillis / threeSentences.length.toDouble()
+        val beforeSeek = engine.spoken.size
+
+        // Character 25 is inside "Two second thing.", which starts at 17.
+        Reader.seekTo((25 * millisPerChar).toLong())
+        awaitUntil("the seek was read") { engine.spoken.size > beforeSeek }
+        awaitFor(id, "finished after seek") { it is Reader.State.Finished }
+        assertEquals("Two second thing. Three third thing.", engine.spoken.last())
+    }
+
+    @Test
+    fun `progress counts sentences and puts the end of a read at its length`() = runBlocking {
+        engine.audioSeconds = 3f
+        readToEnd()
+        val progress = Reader.progress()!!
+        assertEquals(3, progress.sentences)
+        assertEquals(3, progress.sentence)
+        // Three seconds of audio for the whole text, measured.
+        assertEquals(3000.0, progress.durationMillis.toDouble(), 50.0)
+        assertEquals(progress.durationMillis.toDouble(), progress.positionMillis.toDouble(), 50.0)
+    }
+
+    @Test
+    fun `next item ends this read and starts the queued one`() = runBlocking<Unit> {
+        engine.gate = CompletableDeferred()
+        val first = Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitFor(first, "speaking") { it is Reader.State.Speaking }
+        val second = Reader.enqueue(context, "Second passage.", treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitUntil("the second read is queued") { Reader.queuedCount.value == 1 }
+
+        Reader.next()
+        awaitFor(second, "second speaking") { it is Reader.State.Speaking }
+        assertEquals(0, Reader.queuedCount.value)
+        engine.gate?.complete(Unit)
+        awaitFor(second, "second finished") { it is Reader.State.Finished }
+    }
+
+    @Test
+    fun `next item with nothing queued leaves the read alone`() = runBlocking<Unit> {
+        engine.gate = CompletableDeferred()
+        val id = Reader.speak(context, threeSentences, treatAsMarkdown = false, source = Reader.Source.Agent)
+        awaitFor(id, "speaking") { it is Reader.State.Speaking }
+        Reader.next()
+        engine.gate?.complete(Unit)
+        awaitFor(id, "finished") { it is Reader.State.Finished }
+    }
+
+    @Test
+    fun `a speed change is composed from the next chunk on`() = runBlocking {
+        Settings(context).speed = 1f
+        engine.gate = CompletableDeferred()
+        val id = Reader.speak(context, threeChunks, treatAsMarkdown = false, source = Reader.Source.Selection)
+        awaitFor(id, "speaking") { it is Reader.State.Speaking }
+        awaitUntil("the first chunk reached the engine") { engine.spoken.isNotEmpty() }
+
+        Reader.cycleSpeed(context)
+        assertEquals(1.25f, Reader.speed.value)
+        assertEquals(1.25f, Settings(context).speed)
+        engine.gate?.complete(Unit)
+        awaitFor(id, "finished") { it is Reader.State.Finished }
+        assertEquals(1f, engine.speeds.first())
+        assertEquals(1.25f, engine.speeds.last())
+    }
+
+    @Test
+    fun `the speed control steps through the presets and wraps`() {
+        Settings(context).speed = 1.5f
+        Reader.cycleSpeed(context)
+        assertEquals(0.8f, Reader.speed.value)
+        // From a slider value between steps, to the next step up.
+        Settings(context).speed = 1.1f
+        Reader.cycleSpeed(context)
+        assertEquals(1.25f, Reader.speed.value)
     }
 
     @Test
@@ -310,7 +443,7 @@ class ReaderTest {
         // Asserted over the sequence of states, collected unconfined. Waiting
         // for the audible one instead would be a race: once the fake engine is
         // ungated it runs to the end in microseconds, and StateFlow conflates.
-        val seen = mutableListOf<Reader.State>()
+        val seen = java.util.Collections.synchronizedList(mutableListOf<Reader.State>())
         val watcher = CoroutineScope(Dispatchers.Unconfined).launch {
             Reader.state.collect { seen += it }
         }
@@ -325,9 +458,11 @@ class ReaderTest {
 
         engine.gate?.complete(Unit)
         awaitFor(id, "finished") { it is Reader.State.Finished }
+        awaitSeen(seen, id)
         watcher.cancel()
 
-        val speaking = seen.filterIsInstance<Reader.State.Speaking>().filter { it.utterance == id }
+        val speaking = synchronized(seen) { seen.toList() }
+            .filterIsInstance<Reader.State.Speaking>().filter { it.utterance == id }
         assertFalse("the first spoken state claimed to be audible", speaking.first().audible)
         assertTrue("never became audible", speaking.any { it.audible })
     }
@@ -609,6 +744,19 @@ class ReaderTest {
             fail("never became true: $what")
         }
     }
+
+    /**
+     * Waits for a watcher collecting into [seen] to reach [utterance]'s ending.
+     *
+     * The watcher is unconfined, so after its first suspension it runs on
+     * whichever thread published the state: the reader's, not this one. The
+     * test seeing the ending first and cancelling it then dropped the ending
+     * from [seen], and the assertion on it failed now and then.
+     */
+    private suspend fun awaitSeen(seen: List<Reader.State>, utterance: Long) =
+        awaitUntil("the watcher saw utterance $utterance end") {
+            synchronized(seen) { seen.any { it.utterance == utterance && it.isTerminal } }
+        }
 
     private companion object {
         const val TIMEOUT_MS = 10_000L

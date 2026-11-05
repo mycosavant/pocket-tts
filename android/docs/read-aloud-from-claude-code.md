@@ -128,9 +128,9 @@ forward once the player is expanded. The lock screen shows back, pause and stop 
 well (`eleven-utterances.md`). The headset buttons are handled in code, including
 "next", but the "next" key has not been tested on a device.
 
-A skip moves by chunk: a paragraph, or up to about 400 characters of one, cut at a
-sentence end where one is available. A short reply is one chunk, so forward on it
-ends the read, and starts the next queued piece if there is one.
+A skip moves by sentence. Forward on the last sentence ends the read and starts
+the next queued piece if there is one, and Next item does that from anywhere in the
+read while something is queued.
 
 Timings says which of the two happened: `playback service: started`, or
 `refused (...)` with the reason. So "a long read stopped halfway" has an answer on

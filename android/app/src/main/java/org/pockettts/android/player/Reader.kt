@@ -251,8 +251,17 @@ object Reader {
     /** [busy], now. */
     val isBusy: Boolean get() = holds.value > 0
 
+    /**
+     * [holds], for a test that has to know its requests have been handled:
+     * a skip returns before it has taken [control], and a test that moves on
+     * at once is testing whichever of the two got there first.
+     */
+    @VisibleForTesting
+    internal val holdCount: Int get() = holds.value
+
     /** Brings the playing-or-queued hold up to date. Caller holds [control]. */
     private fun refreshLocked() {
+        _queuedCount.value = queue.size
         val running = job?.isActive == true || queue.isNotEmpty()
         if (running == runningHeld) return
         runningHeld = running
@@ -272,12 +281,19 @@ object Reader {
         val turn: Long,
         val source: Source,
         val speakable: String,
-        val chunks: List<TextChunker.Chunk>,
+        /**
+         * Replaced by a skip that lands inside a chunk, which chunks the text
+         * again from the sentence it lands on. Only replaced under [control]
+         * with no read in progress, so a read sees one list from start to end.
+         */
+        @Volatile var chunks: List<TextChunker.Chunk>,
         val engine: SpeechEngine,
-        val speed: Float,
         /** Whether its chunks continue each other; see [SpeechEngine.Read]. */
         val continuing: Boolean,
-    )
+    ) {
+        /** What a skip moves by; see [TextChunker.sentenceStarts]. */
+        val sentences: List<Int> = TextChunker.sentenceStarts(speakable)
+    }
 
     @Volatile
     private var utterance: Utterance? = null
@@ -323,6 +339,147 @@ object Reader {
      */
     @VisibleForTesting
     internal val queued: Int get() = queue.size
+
+    private val _queuedCount = MutableStateFlow(0)
+
+    /** How many reads are waiting behind this one, for the controls to show. */
+    val queuedCount: StateFlow<Int> = _queuedCount.asStateFlow()
+
+    private val _speed = MutableStateFlow(1f)
+
+    /**
+     * The speed reads are composed at. Read before each chunk, so a change
+     * is heard from the next chunk composed: the one after the current, or
+     * the one after that if it is already composed.
+     */
+    val speed: StateFlow<Float> = _speed.asStateFlow()
+
+    /** The speeds the speed control steps through. */
+    @VisibleForTesting
+    internal val SPEED_STEPS = listOf(0.8f, 1f, 1.25f, 1.5f)
+
+    /** Steps the speed to the next of [SPEED_STEPS], and keeps it for later reads. */
+    fun cycleSpeed(context: Context) {
+        // From the saved speed, which the slider on the main screen may have
+        // set to something between the steps.
+        val now = Settings(context).speed
+        setSpeed(context, SPEED_STEPS.firstOrNull { it > now + 0.01f } ?: SPEED_STEPS.first())
+    }
+
+    /** Sets the speed for the read in progress and every one after it. */
+    fun setSpeed(context: Context, speed: Float) {
+        val settings = Settings(context)
+        settings.speed = speed
+        // Read back, so the reader holds the clamped value the setting keeps.
+        _speed.value = settings.speed
+    }
+
+    /**
+     * Seconds of speech per character of text, at speed 1: measured from
+     * every chunk heard so far, and a guess at 15 characters a second before
+     * the first. What turns a character offset into a time and back.
+     */
+    @Volatile
+    private var secondsPerChar = 1.0 / 15
+
+    private var measuredSeconds = 0.0
+    private var measuredChars = 0
+
+    /** Samples of the current chunk written to the sink, for [positionChars]. */
+    @Volatile
+    private var chunkSamples = 0L
+
+    /**
+     * Where the last few chunks began in the sink's frames, newest last: so
+     * [positionChars] can tell which chunk the listener is actually hearing,
+     * which near a boundary is the one before the chunk being written.
+     */
+    @Volatile
+    private var chunkMarks: List<Mark> = emptyList()
+
+    /**
+     * Chunk [index] began at sink frame [frame], composed at [speed]. The
+     * speed is the chunk's own: a speed change is heard from a later chunk,
+     * and measuring the chunk in the ear with the new speed put the
+     * position a quarter of a chunk off.
+     */
+    private class Mark(val index: Int, val frame: Long, val speed: Float)
+
+    /** The speed the chunk in [chunkIndex] was composed at, for when the sink cannot say what is heard. */
+    @Volatile
+    private var chunkSpeed = 1f
+
+    private fun markChunk(index: Int, frame: Long, speed: Float) {
+        chunkSpeed = speed
+        chunkMarks = (chunkMarks + Mark(index, frame, speed)).takeLast(4)
+    }
+
+    /** Forgets where the listener was, before the chunks change under it. */
+    private fun resetPosition(index: Int) {
+        chunkMarks = emptyList()
+        chunkSamples = 0
+        chunkIndex = index
+        chunkSpeed = _speed.value
+    }
+
+    /** Milliseconds per character at the current speed. */
+    private val millisPerChar: Double get() = secondsPerChar / _speed.value * 1000
+
+    /**
+     * Where the listener is in [current], as an offset into its speakable
+     * text: the start of the chunk being heard, plus as much of it as its
+     * samples so far account for. An estimate, and the best one there is:
+     * the model composes a chunk whole and does not say where in it a
+     * sentence ends.
+     */
+    private fun positionChars(current: Utterance): Int = heard(current).second
+
+    /** The chunk being heard and the offset reached in it; see [positionChars]. */
+    private fun heard(current: Utterance): Pair<TextChunker.Chunk?, Int> {
+        var index = chunkIndex
+        var samples = chunkSamples
+        var speed = chunkSpeed
+        // What the listener hears, where the sink can say: the chunk whose
+        // first frame was played last, and how far past it the playback is.
+        val played = player?.playedFrames ?: -1
+        val marks = chunkMarks
+        if (played >= 0 && marks.isNotEmpty()) {
+            val mark = marks.lastOrNull { it.frame <= played } ?: marks.first()
+            index = mark.index
+            samples = (played - mark.frame).coerceAtLeast(0)
+            speed = mark.speed
+        }
+        val chunk = current.chunks.getOrNull(index) ?: return null to 0
+        val rate = current.engine.sampleRate.toDouble()
+        val heard = (samples / rate * speed / secondsPerChar).toInt()
+        return chunk to chunk.start + heard.coerceIn(0, chunk.end - chunk.start)
+    }
+
+    /** Where the read in progress is, for the media session and the notification. */
+    data class Progress(
+        val positionMillis: Long,
+        val durationMillis: Long,
+        /** One-based. */
+        val sentence: Int,
+        val sentences: Int,
+        /** The chunk being heard, as offsets into [speakableText]. */
+        val heardStart: Int,
+        val heardEnd: Int,
+    )
+
+    fun progress(): Progress? {
+        val current = utterance ?: return null
+        val (chunk, position) = heard(current)
+        val sentence = current.sentences.indexOfLast { it <= position }.coerceAtLeast(0)
+        return Progress(
+            positionMillis = (position * millisPerChar).toLong(),
+            durationMillis = (current.speakable.length * millisPerChar).toLong(),
+            sentence = sentence + 1,
+            sentences = current.sentences.size,
+            heardStart = chunk?.start ?: 0,
+            heardEnd = chunk?.end ?: 0,
+        )
+    }
 
     @Volatile
     private var chunkIndex: Int = 0
@@ -385,6 +542,13 @@ object Reader {
         stoppedAt = 0
         order.set(0)
         beforeRequest = null
+        _queuedCount.value = 0
+        _speed.value = 1f
+        secondsPerChar = 1.0 / 15
+        measuredSeconds = 0.0
+        measuredChars = 0
+        chunkSamples = 0
+        chunkMarks = emptyList()
         utterance = null
         currentSource = null
         currentUtterance = 0
@@ -517,6 +681,12 @@ object Reader {
     private fun startLocked(pending: Pending) {
         currentSource = pending.source
         currentUtterance = pending.id
+        // The last read is no longer the one in progress. Left in place, a
+        // skip while this one was still preparing replayed the last read and
+        // dropped this one, and the controls drew the last read's progress
+        // over this one's text.
+        utterance = null
+        resetPosition(0)
         launchLocked {
             run(
                 pending.context,
@@ -580,11 +750,14 @@ object Reader {
     }
 
     /**
-     * Moves [delta] chunks - roughly sentences - and carries on reading.
+     * Moves [delta] sentences and carries on reading.
      *
-     * Skipping back past the start replays the first chunk; skipping forward
-     * past the end finishes the utterance, which is what a listener who keeps
-     * tapping forward means by it.
+     * Back restarts the sentence being heard, unless it began less than
+     * [RESTART_SECONDS] ago, in which case it goes to the one before: what a
+     * music player does with a track, and what makes a single tap mean
+     * "again". Skipping back past the start replays the first sentence;
+     * skipping forward past the end finishes the utterance, which is what a
+     * listener who keeps tapping forward means by it.
      */
     fun skip(delta: Int) {
         if (delta == 0) return
@@ -595,8 +768,13 @@ object Reader {
         request { stopped ->
             if (stopped) return@request
             val current = utterance ?: return@request
-            val target = chunkIndex + delta
-            if (target >= current.chunks.size) {
+            val starts = current.sentences
+            val position = positionChars(current)
+            val here = starts.indexOfLast { it <= position }.coerceAtLeast(0)
+            val intoSentence = (position - starts[here]) * millisPerChar / 1000
+            val target = if (delta < 0 && intoSentence > RESTART_SECONDS) here + delta + 1 else here + delta
+            Log.i(TAG, "Skip $delta: hearing sentence ${here + 1}, %.1fs in; to ${target + 1}".format(intoSentence))
+            if (target >= starts.size) {
                 stopLocked(ending = State.Finished(current.id, current.source))
                 // Skipping off the end is an ending like any other, and
                 // what was queued behind it is still wanted. The cancel
@@ -605,9 +783,60 @@ object Reader {
                 advanceLocked()
                 return@request
             }
-            stopLocked(ending = null)
-            val from = target.coerceAtLeast(0)
-            launchLocked { play(current, from) }
+            seekLocked(current, starts[target.coerceAtLeast(0)])
+        }
+    }
+
+    /**
+     * Carries on reading from the sentence at [millis], as the media
+     * session's seek bar asks. The time is turned into a place in the text
+     * with the same estimate [progress] reports it with, so a seek lands
+     * where the bar said it would.
+     */
+    fun seekTo(millis: Long) {
+        request { stopped ->
+            if (stopped) return@request
+            val current = utterance ?: return@request
+            val offset = (millis / millisPerChar).toInt()
+            val sentence = current.sentences.lastOrNull { it <= offset } ?: 0
+            seekLocked(current, sentence)
+        }
+    }
+
+    /**
+     * Reads [current] from [offset], which is a sentence start. Caller holds
+     * [control].
+     *
+     * The chunks before [offset] are kept and the text from it is chunked
+     * again, so a sentence inside a chunk becomes the start of one. Landing
+     * on a chunk's own start chunks it exactly as before.
+     */
+    private suspend fun seekLocked(current: Utterance, offset: Int) {
+        stopLocked(ending = null)
+        val before = current.chunks.filter { it.end <= offset }
+        // Here and not only when the new read begins: a second tap handled
+        // before then measured from the last chunk's position against the new
+        // list, and a double tap on back went two sentences instead of one.
+        // Before the list changes, so nothing reads the old position against it.
+        resetPosition(before.size)
+        current.chunks = before + TextChunker.chunkFrom(current.speakable, offset, current.continuing)
+        launchLocked { play(current, before.size) }
+    }
+
+    /**
+     * Ends this read and starts the next queued one. Nothing happens with
+     * nothing queued: the control is only offered while something is.
+     */
+    fun next() {
+        request { stopped ->
+            if (stopped || queue.isEmpty()) return@request
+            val source = currentSource
+            if (source != null) {
+                stopLocked(ending = State.Stopped(currentUtterance, source))
+            } else {
+                stopLocked(ending = null)
+            }
+            advanceLocked()
         }
     }
 
@@ -652,6 +881,7 @@ object Reader {
         }
 
         val askedAt = System.currentTimeMillis()
+        _speed.value = settings.speed
         try {
             _state.value = State.Preparing(id, source, 0f)
             val engine = engines.create(context) { fraction ->
@@ -665,7 +895,6 @@ object Reader {
                 speakable = speakable,
                 chunks = TextChunker.chunk(speakable, continuing = settings.continueChunks),
                 engine = engine,
-                speed = settings.speed,
                 continuing = settings.continueChunks,
             )
             utterance = prepared
@@ -682,7 +911,7 @@ object Reader {
      * One piece of a chunk's audio on its way from the engine to the sink;
      * the end of a chunk when [samples] is null.
      */
-    private class Piece(val chunk: Int, val samples: FloatArray?)
+    private class Piece(val chunk: Int, val samples: FloatArray?, val speed: Float = 1f)
 
     /**
      * Reads [current] from chunk [from] to the end.
@@ -738,7 +967,11 @@ object Reader {
             // bug the Idle-means-two-things design had, wearing a new hat.
             val interrupted = AtomicBoolean(false)
             var audible = false
+            var framesWritten = 0L
             chunkIndex = from
+            chunkSamples = 0
+            chunkMarks = listOf(Mark(from, 0L, _speed.value))
+            chunkSpeed = _speed.value
             _state.value = speakingState(current, from, paused = sink.isPaused, audible = false)
 
             // Unbounded on purpose: the engine's callback cannot suspend, and a
@@ -765,7 +998,8 @@ object Reader {
                             val chunk = current.chunks[index]
                             val startedAt = System.currentTimeMillis()
                             var samplesProduced = 0L
-                            val spoke = current.engine.synthesize(chunk.speech, current.speed, read) { samples ->
+                            val speed = _speed.value
+                            val spoke = current.engine.synthesize(chunk.speech, speed, read) { samples ->
                                 // The engine only looks at this between pieces,
                                 // so a stop is felt within one piece rather than
                                 // at the end of the chunk.
@@ -778,7 +1012,7 @@ object Reader {
                                     return@synthesize false
                                 }
                                 samplesProduced += samples.size
-                                pieces.trySend(Piece(index, samples))
+                                pieces.trySend(Piece(index, samples, speed))
                                 true
                             }
                             if (index == from) {
@@ -795,7 +1029,7 @@ object Reader {
                                 interrupted.set(true)
                                 break
                             }
-                            pieces.trySend(Piece(index, null))
+                            pieces.trySend(Piece(index, null, speed))
                         }
                         pieces.close()
                     } catch (cancelled: CancellationException) {
@@ -816,14 +1050,19 @@ object Reader {
                         if (piece.chunk != writing) {
                             writing = piece.chunk
                             chunkIndex = writing
+                            chunkSamples = 0
+                            markChunk(writing, framesWritten, piece.speed)
                             _state.value = speakingState(current, writing, paused = sink.isPaused, audible = audible)
                         }
                         val samples = piece.samples
                         if (samples == null) {
-                            if (!sink.writeSilence(current.chunks[piece.chunk].trailingPauseSeconds)) {
+                            learnRate(current.chunks[piece.chunk], chunkSamples, current.engine.sampleRate, piece.speed)
+                            val pause = current.chunks[piece.chunk].trailingPauseSeconds
+                            if (!sink.writeSilence(pause)) {
                                 interrupted.set(true)
                                 break
                             }
+                            framesWritten += (pause * current.engine.sampleRate).toLong()
                             permits.release()
                             continue
                         }
@@ -835,6 +1074,8 @@ object Reader {
                             interrupted.set(true)
                             break
                         }
+                        chunkSamples += samples.size
+                        framesWritten += samples.size
                         if (!audible) {
                             audible = true
                             askedAt?.let { Metrics.timeToFirstAudioMillis = System.currentTimeMillis() - it }
@@ -914,6 +1155,18 @@ object Reader {
      */
     @VisibleForTesting
     internal const val LOOKAHEAD_CHUNKS = 1
+
+    /** How far into a sentence skipping back restarts it rather than going to the one before. */
+    private const val RESTART_SECONDS = 2.0
+
+    /** Folds a whole chunk heard at [speed] into [secondsPerChar]. */
+    private fun learnRate(chunk: TextChunker.Chunk, samples: Long, sampleRate: Int, speed: Float) {
+        val chars = chunk.end - chunk.start
+        if (samples <= 0 || chars <= 0) return
+        measuredSeconds += samples.toDouble() / sampleRate * speed
+        measuredChars += chars
+        secondsPerChar = measuredSeconds / measuredChars
+    }
 
     /**
      * Counts pauses and resumes, so [AudioFocus] can tell whether the pause it
