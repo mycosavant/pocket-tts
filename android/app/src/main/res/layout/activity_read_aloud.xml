@@ -110,7 +110,7 @@
             android:contentDescription="@string/pause"
             android:scaleType="center"
             android:src="@drawable/ic_pause"
-            android:tint="?attr/colorPrimary" />
+            app:tint="?attr/colorPrimary" />
 
         <ImageButton
             android:id="@+id/forwardButton"
