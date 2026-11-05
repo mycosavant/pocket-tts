@@ -3,7 +3,20 @@ package org.pockettts.android.ui
 import android.app.Activity
 import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.RadialGradient
+import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.Shader
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.LayerDrawable
 import android.os.Build
 import android.util.Log
 import android.view.Gravity
@@ -151,7 +164,19 @@ object Glass {
         ).apply {
             setStroke(density, ColorUtils.setAlphaComponent(outline, STROKE_ALPHA))
         }
-        window.setBackgroundDrawable(background)
+        val primary = MaterialColors.getColor(
+            activity,
+            androidx.appcompat.R.attr.colorPrimary,
+            Color.WHITE,
+        )
+        val onSurface = MaterialColors.getColor(
+            activity,
+            com.google.android.material.R.attr.colorOnSurface,
+            Color.WHITE,
+        )
+        window.setBackgroundDrawable(
+            LayerDrawable(arrayOf(background, Texture(corner, onSurface, primary))),
+        )
 
         fun paint(blurred: Boolean) {
             val alpha = if (blurred) settings.glassAlpha else 1f
@@ -201,6 +226,79 @@ object Glass {
                 }
             },
         )
+    }
+
+    /**
+     * Grain and a soft sheen over the sheet's surface.
+     *
+     * The sheet cannot frost the app behind it on most phones (see
+     * [applyToWindow]), so this is what makes it read as glass there: texture
+     * drawn entirely inside our own window, which needs no vendor opt-in. Where
+     * cross-window blur does run, it sits on top of the frost the same way.
+     */
+    private class Texture(
+        private val corner: Float,
+        private val grainColour: Int,
+        private val tint: Int,
+    ) : Drawable() {
+
+        private val clip = Path()
+        private val grain = Paint().apply { shader = BitmapShader(noise(grainColour), Shader.TileMode.REPEAT, Shader.TileMode.REPEAT) }
+        private val sheen = Paint()
+        private val glow = Paint()
+
+        override fun onBoundsChange(bounds: Rect) {
+            val w = bounds.width().toFloat()
+            val h = bounds.height().toFloat()
+            clip.reset()
+            clip.addRoundRect(
+                RectF(bounds),
+                floatArrayOf(corner, corner, corner, corner, 0f, 0f, 0f, 0f),
+                Path.Direction.CW,
+            )
+            if (w <= 0f || h <= 0f) return
+            sheen.shader = RadialGradient(
+                bounds.left + w * 0.15f, bounds.top.toFloat(), maxOf(w, h) * 0.9f,
+                ColorUtils.setAlphaComponent(Color.WHITE, SHEEN_ALPHA), Color.TRANSPARENT,
+                Shader.TileMode.CLAMP,
+            )
+            glow.shader = RadialGradient(
+                bounds.right.toFloat(), bounds.bottom.toFloat(), w * 0.8f,
+                ColorUtils.setAlphaComponent(tint, GLOW_ALPHA), Color.TRANSPARENT,
+                Shader.TileMode.CLAMP,
+            )
+        }
+
+        override fun draw(canvas: Canvas) {
+            val save = canvas.save()
+            canvas.clipPath(clip)
+            canvas.drawPaint(glow)
+            canvas.drawPaint(sheen)
+            canvas.drawPaint(grain)
+            canvas.restoreToCount(save)
+        }
+
+        override fun setAlpha(alpha: Int) = Unit
+        override fun setColorFilter(colorFilter: ColorFilter?) = Unit
+
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity() = PixelFormat.TRANSLUCENT
+
+        private companion object {
+            const val SHEEN_ALPHA = 0x1C
+            const val GLOW_ALPHA = 0x24
+            const val GRAIN_SIZE = 96
+            const val GRAIN_MAX_ALPHA = 20
+
+            /** A fixed seed, so the grain does not shimmer each time the sheet opens. */
+            fun noise(colour: Int): Bitmap {
+                val random = java.util.Random(7)
+                val pixels = IntArray(GRAIN_SIZE * GRAIN_SIZE) {
+                    ColorUtils.setAlphaComponent(colour, random.nextInt(GRAIN_MAX_ALPHA))
+                }
+                return Bitmap.createBitmap(pixels, GRAIN_SIZE, GRAIN_SIZE, Bitmap.Config.ARGB_8888)
+            }
+        }
     }
 
     /**

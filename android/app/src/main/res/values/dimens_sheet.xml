@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- About a keyboard's height, so the paragraph that was selected stays in view above it. -->
+    <dimen name="read_aloud_sheet_height">250dp</dimen>
+</resources>
