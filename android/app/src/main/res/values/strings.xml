@@ -152,4 +152,7 @@
     <string name="download">Download</string>
     <string name="delete">Delete</string>
     <string name="cancel">Cancel</string>
+    <string name="open_settings">Settings</string>
+    <string name="voice_and_sentence">%1$s · sentence %2$d of %3$d</string>
+    <string name="voice_paused">%1$s · paused</string>
 </resources>
